@@ -40,15 +40,30 @@ zero accounts, and zero API keys.
 1. Mobile-first dark UI (Tailwind CDN)
 2. Geolocation on load (`navigator.geolocation`)
 3. Reverse geocoding to show a readable place name
-4. Current weather (temp, wind, condition text/emoji)
+4. Current weather (temp, wind, condition text/emoji, sunrise/sunset)
 5. 7-day horizontally scrolling forecast strip
-6. Nearby landmarks as cards, each with a Wikipedia link AND a Google Maps
-   link, with distance explicitly labeled ("X km from your current location"
-   or "X km from <searched city>")
+6. Nearby landmarks grouped into collapsible categories (Parks & Nature,
+   Museums & Culture, Religious Sites, Historic Landmarks, Buildings &
+   Transit, Other Attractions) — classified by keyword-matching each
+   place's Wikipedia short description (`prop=description`, one batched
+   call for all pageids). Collapsed by default so someone in a hurry sees
+   category counts instead of scrolling a long flat list. Each card still
+   has a Wikipedia link AND a Google Maps link, with distance explicitly
+   labeled ("X km from your current location" or "X km from <searched
+   city>")
 7. Manual city search bar with debounced (300ms) autocomplete dropdown,
    keyboard navigation (arrows/enter/escape), tolerant of typos via
    Nominatim's built-in fuzzy matching
 8. PWA install support via manifest + service worker
+9. Hourly forecast bottom-sheet modal — tapping the current weather card
+   or any day in the 7-day strip opens that day's hour-by-hour breakdown
+   (temp, condition, precipitation probability), with the current hour
+   highlighted as "Now" when viewing today. Reads from the same
+   Open-Meteo response already fetched (`hourly=...`), no extra request.
+   Note: Open-Meteo returns naive local-time strings for the queried
+   location (no UTC offset embedded), so the "Now" comparison shifts the
+   real UTC clock by the response's `utc_offset_seconds` and compares as
+   strings — don't compare those timestamps directly against `new Date()`.
 
 ## Why these choices (for context on any future changes)
 - Vanilla JS instead of React/Vue: app has too little state to justify a

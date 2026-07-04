@@ -120,7 +120,7 @@
         <div id="currentWeatherLoading" class="flex items-center gap-2 text-neutral-400 text-sm">
           <div class="spinner"></div> Loading current weather…
         </div>
-        <div id="currentWeatherContent" class="hidden fade-in">
+        <div id="currentWeatherContent" class="hidden fade-in cursor-pointer active:scale-[0.99] transition" title="Tap for hourly forecast">
           <div class="flex items-start justify-between">
             <div>
               <p id="currentTemp" class="text-6xl font-bold text-white leading-none">--°</p>
@@ -144,6 +144,7 @@
               <span>🌇</span> <span id="currentSunset">--</span>
             </div>
           </div>
+          <p class="text-xs text-sky-400/80 mt-4">Tap for hourly forecast →</p>
         </div>
       </section>
 
@@ -178,6 +179,24 @@
     </main>
   </div>
 
+  <!-- ============================================================
+       HOURLY FORECAST BOTTOM SHEET
+       Hidden by default; opened by tapping the current weather card
+       or any day in the 7-day strip. Shared by both triggers — which
+       day's hours it shows depends on which was tapped.
+       ============================================================ -->
+  <div id="hourlyModal" class="hidden fixed inset-0 z-40">
+    <div id="hourlyModalBackdrop" class="absolute inset-0 bg-black/60"></div>
+    <div class="absolute bottom-0 left-0 right-0 max-w-md mx-auto max-h-[75vh] flex flex-col bg-neutral-900 border-t border-neutral-700 rounded-t-3xl fade-in">
+      <div class="flex items-center justify-between px-5 pt-4 pb-3 border-b border-neutral-800">
+        <h3 id="hourlyModalTitle" class="text-white font-semibold text-sm">Hourly forecast</h3>
+        <button id="hourlyModalClose" type="button" title="Close"
+          class="shrink-0 w-8 h-8 rounded-full bg-neutral-800 flex items-center justify-center text-neutral-400 active:scale-95 transition">✕</button>
+      </div>
+      <div id="hourlyModalList" class="overflow-y-auto px-5 py-4 space-y-2"></div>
+    </div>
+  </div>
+
 <script>
 /* =====================================================================
    APP LOGIC
@@ -210,6 +229,16 @@ const landmarksLoading  = document.getElementById('landmarksLoading');
 const landmarksList     = document.getElementById('landmarksList');
 const landmarksEmpty    = document.getElementById('landmarksEmpty');
 const landmarksSubtitle = document.getElementById('landmarksSubtitle');
+
+const hourlyModal        = document.getElementById('hourlyModal');
+const hourlyModalBackdrop = document.getElementById('hourlyModalBackdrop');
+const hourlyModalClose    = document.getElementById('hourlyModalClose');
+const hourlyModalTitle    = document.getElementById('hourlyModalTitle');
+const hourlyModalList     = document.getElementById('hourlyModalList');
+
+// Keeps the most recent full Open-Meteo response (current + daily + hourly)
+// around so the hourly modal can read from it without a second network call.
+let lastWeatherData = null;
 
 // Tracks what the currently-shown distances are measured FROM (either
 // "your current GPS location" or the name of a searched city), so the
@@ -336,6 +365,7 @@ async function fetchWeather(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
               `&current=temperature_2m,wind_speed_10m,weather_code` +
               `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
+              `&hourly=temperature_2m,weather_code,precipitation_probability` +
               `&timezone=auto`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('Weather fetch failed');
@@ -370,19 +400,80 @@ function renderForecast(weatherData) {
     const dayLabel = i === 0 ? 'Today' : new Date(dateStr).toLocaleDateString([], { weekday: 'short' });
 
     const card = document.createElement('div');
-    card.className = 'shrink-0 w-20 flex flex-col items-center gap-1.5 bg-neutral-900 border border-neutral-800 rounded-2xl py-4';
+    card.className = 'shrink-0 w-20 flex flex-col items-center gap-1.5 bg-neutral-900 border border-neutral-800 rounded-2xl py-4 cursor-pointer active:scale-95 transition';
+    card.title = 'Tap for hourly forecast';
     card.innerHTML = `
       <span class="text-xs text-neutral-400 font-medium">${dayLabel}</span>
       <span class="text-2xl">${info.emoji}</span>
       <span class="text-sm font-semibold text-white">${Math.round(daily.temperature_2m_max[i])}°</span>
       <span class="text-xs text-neutral-500">${Math.round(daily.temperature_2m_min[i])}°</span>
     `;
+    card.addEventListener('click', () => openHourlyModal(i));
     forecastStrip.appendChild(card);
   });
 
   forecastLoading.classList.add('hidden');
   forecastStrip.classList.remove('hidden');
 }
+
+// ---------------------------------------------------------------------
+// HOURLY FORECAST MODAL
+// Shared bottom sheet opened by tapping either the current weather card
+// (today, dayIndex 0) or any card in the 7-day strip (dayIndex 0-6).
+// Reads from lastWeatherData instead of making a new API call.
+// ---------------------------------------------------------------------
+function openHourlyModal(dayIndex) {
+  if (!lastWeatherData || !lastWeatherData.hourly) return;
+  const daily = lastWeatherData.daily;
+  const hourly = lastWeatherData.hourly;
+  const dateStr = daily.time[dayIndex];
+
+  hourlyModalTitle.textContent = dayIndex === 0
+    ? 'Today · Hourly forecast'
+    : `${new Date(dateStr).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })} · Hourly forecast`;
+
+  hourlyModalList.innerHTML = '';
+
+  // Open-Meteo's timestamps are naive local-time strings for the queried
+  // location (no UTC offset in the string itself), so comparing them
+  // against the browser's own `new Date()` would silently break whenever
+  // the browser's timezone differs from the location's. Instead, shift
+  // real UTC "now" by the location's utc_offset_seconds and compare as
+  // strings — that keeps everything in the same naive-local representation.
+  const nowLocalStr = new Date(Date.now() + (lastWeatherData.utc_offset_seconds || 0) * 1000).toISOString();
+
+  hourly.time.forEach((t, i) => {
+    if (!t.startsWith(dateStr)) return; // only this day's 24 hours
+
+    const info = describeWeatherCode(hourly.weather_code[i]);
+    const hourDate = new Date(t);
+    const isCurrentHour = dayIndex === 0 && t.slice(0, 13) === nowLocalStr.slice(0, 13);
+    const precip = hourly.precipitation_probability ? hourly.precipitation_probability[i] : null;
+
+    const row = document.createElement('div');
+    row.className = `flex items-center justify-between px-3 py-2 rounded-xl ${isCurrentHour ? 'bg-sky-500/10 border border-sky-500/30' : 'bg-neutral-800/50'}`;
+    row.innerHTML = `
+      <span class="text-sm text-neutral-300 w-16">${isCurrentHour ? 'Now' : hourDate.toLocaleTimeString([], { hour: 'numeric' })}</span>
+      <span class="text-xl">${info.emoji}</span>
+      <span class="text-sm text-neutral-400 w-14 text-right">${precip !== null ? precip + '% 💧' : ''}</span>
+      <span class="text-sm font-semibold text-white w-12 text-right">${Math.round(hourly.temperature_2m[i])}°</span>
+    `;
+    hourlyModalList.appendChild(row);
+  });
+
+  hourlyModal.classList.remove('hidden');
+}
+
+function closeHourlyModal() {
+  hourlyModal.classList.add('hidden');
+}
+
+hourlyModalClose.addEventListener('click', closeHourlyModal);
+hourlyModalBackdrop.addEventListener('click', closeHourlyModal);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !hourlyModal.classList.contains('hidden')) closeHourlyModal();
+});
+currentWeatherContent.addEventListener('click', () => openHourlyModal(0));
 
 // ---------------------------------------------------------------------
 // STEP 4: Find nearby landmarks / historical points of interest using
@@ -395,7 +486,115 @@ async function fetchNearbyLandmarks(lat, lon) {
   const res = await fetch(url);
   if (!res.ok) throw new Error('Wikipedia fetch failed');
   const data = await res.json();
-  return data.query ? data.query.geosearch : [];
+  const places = data.query ? data.query.geosearch : [];
+  if (!places.length) return places;
+
+  // Enrich each place with Wikipedia's short description (e.g. "public park",
+  // "art museum", "17th-century church") so it can be sorted into a category
+  // below. One batched request for all pageids — same cost as before, just
+  // one extra keyless/CORS-friendly Wikipedia call.
+  try {
+    const descUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=description` +
+                     `&pageids=${places.map((p) => p.pageid).join('|')}&format=json&origin=*`;
+    const descRes = await fetch(descUrl);
+    if (descRes.ok) {
+      const descData = await descRes.json();
+      const pages = (descData.query && descData.query.pages) || {};
+      places.forEach((p) => {
+        const page = pages[p.pageid];
+        p.description = page ? (page.description || '') : '';
+      });
+    }
+  } catch {
+    // Non-fatal — places missing a description just fall into "Other Attractions"
+  }
+
+  return places;
+}
+
+// ---------------------------------------------------------------------
+// Landmark categorization: classify each place into a bucket by matching
+// keywords against its Wikipedia short description (falling back to the
+// title when there's no description). Lets someone in a hurry scan
+// category counts instead of scrolling a long flat list.
+// ---------------------------------------------------------------------
+const LANDMARK_CATEGORIES = [
+  { key: 'parks',     label: 'Parks & Nature',       emoji: '🌳', keywords: ['park', 'garden', 'nature reserve', 'forest', 'lake', 'mountain', 'trail', 'botanical', 'beach', 'wood'] },
+  { key: 'museums',   label: 'Museums & Culture',    emoji: '🖼️', keywords: ['museum', 'gallery', 'theatre', 'theater', 'exhibit', 'cultural', 'art'] },
+  { key: 'religious', label: 'Religious Sites',      emoji: '⛪', keywords: ['church', 'cathedral', 'temple', 'mosque', 'synagogue', 'shrine', 'basilica', 'chapel', 'abbey'] },
+  { key: 'landmarks', label: 'Historic Landmarks',   emoji: '🏛️', keywords: ['historic', 'monument', 'memorial', 'castle', 'fort', 'ruins', 'archaeological', 'heritage', 'palace', 'tomb'] },
+  { key: 'transit',   label: 'Buildings & Transit',  emoji: '🏢', keywords: ['station', 'bridge', 'tower', 'building', 'skyscraper', 'airport', 'stadium'] },
+  { key: 'other',     label: 'Other Attractions',    emoji: '📍', keywords: [] }, // catch-all, must stay last
+];
+
+function classifyLandmark(place) {
+  const text = (place.description || place.title || '').toLowerCase();
+  for (const cat of LANDMARK_CATEGORIES) {
+    if (cat.keywords.some((kw) => text.includes(kw))) return cat;
+  }
+  return LANDMARK_CATEGORIES[LANDMARK_CATEGORIES.length - 1];
+}
+
+function buildLandmarkCard(place) {
+  const distanceKm = (place.dist / 1000).toFixed(1);
+  const wikiUrl = `https://en.wikipedia.org/?curid=${place.pageid}`;
+  // Google Maps link built straight from the place's own coordinates,
+  // so it drops a pin exactly on the landmark. This uses Google's public
+  // "search by coordinates" URL format — no API key or Places lookup needed.
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}`;
+
+  const card = document.createElement('div');
+  card.className = 'bg-neutral-950/60 border border-neutral-800 rounded-xl px-4 py-3';
+  card.innerHTML = `
+    <p class="text-white font-medium truncate">${place.title}</p>
+    <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${currentReferenceLabel}</p>
+    <div class="flex gap-2 mt-3">
+      <a href="${wikiUrl}" target="_blank" rel="noopener noreferrer"
+         class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">
+        📖 Wikipedia
+      </a>
+      <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer"
+         class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">
+        📍 Google Maps
+      </a>
+    </div>
+  `;
+  return card;
+}
+
+// A collapsible section for one category (e.g. "Parks & Nature (3)").
+// Collapsed by default — someone in a hurry sees category counts at a
+// glance instead of scrolling past everything to find what they need.
+function buildCategorySection(cat, items) {
+  const section = document.createElement('div');
+  section.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden';
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'w-full flex items-center justify-between px-4 py-3 active:bg-neutral-800/70 transition';
+  header.innerHTML = `
+    <span class="flex items-center gap-2 text-sm font-medium text-white">
+      <span>${cat.emoji}</span> ${cat.label}
+      <span class="text-neutral-500 font-normal">(${items.length})</span>
+    </span>
+    <svg class="chevron w-4 h-4 text-neutral-400 transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M6 9l6 6 6-6"/>
+    </svg>
+  `;
+
+  const body = document.createElement('div');
+  body.className = 'hidden px-4 pb-4 space-y-3';
+  items.forEach((place) => body.appendChild(buildLandmarkCard(place)));
+
+  header.addEventListener('click', () => {
+    const opening = body.classList.contains('hidden');
+    body.classList.toggle('hidden');
+    header.querySelector('.chevron').style.transform = opening ? 'rotate(180deg)' : '';
+  });
+
+  section.appendChild(header);
+  section.appendChild(body);
+  return section;
 }
 
 function renderLandmarks(places) {
@@ -411,31 +610,18 @@ function renderLandmarks(places) {
     return;
   }
 
+  // Group into categories, preserving each place's distance-sorted order
+  const groups = new Map(); // category key -> array of places
   places.forEach((place) => {
-    const distanceKm = (place.dist / 1000).toFixed(1);
-    const wikiUrl = `https://en.wikipedia.org/?curid=${place.pageid}`;
-    // Google Maps link built straight from the place's own coordinates,
-    // so it drops a pin exactly on the landmark. This uses Google's public
-    // "search by coordinates" URL format — no API key or Places lookup needed.
-    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}`;
+    const cat = classifyLandmark(place);
+    if (!groups.has(cat.key)) groups.set(cat.key, []);
+    groups.get(cat.key).push(place);
+  });
 
-    const card = document.createElement('div');
-    card.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3';
-    card.innerHTML = `
-      <p class="text-white font-medium truncate">${place.title}</p>
-      <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${currentReferenceLabel}</p>
-      <div class="flex gap-2 mt-3">
-        <a href="${wikiUrl}" target="_blank" rel="noopener noreferrer"
-           class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">
-          📖 Wikipedia
-        </a>
-        <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer"
-           class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">
-          📍 Google Maps
-        </a>
-      </div>
-    `;
-    landmarksList.appendChild(card);
+  // Render in the fixed taxonomy order above, skipping empty categories
+  LANDMARK_CATEGORIES.forEach((cat) => {
+    const items = groups.get(cat.key);
+    if (items && items.length) landmarksList.appendChild(buildCategorySection(cat, items));
   });
 
   landmarksLoading.classList.add('hidden');
@@ -478,6 +664,7 @@ async function loadEverythingForCoords(lat, lon, knownLabel) {
   // 2) Weather (current + forecast)
   fetchWeather(lat, lon)
     .then((weatherData) => {
+      lastWeatherData = weatherData;
       renderCurrentWeather(weatherData);
       renderForecast(weatherData);
     })
