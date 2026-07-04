@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>NearMe Weather</title>
+
+<!-- ============================================================
+     PWA SETUP — this is what lets Android/iOS treat this page as
+     an installable "app" (own icon, splash screen, no browser bar)
+     instead of just a bookmarked website. No native build tools
+     needed for this part — it all works from plain files.
+     ============================================================ -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0a0a0a" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="NearMe" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" href="icon-192.png" />
+
+<!-- ============================================================
+     Tailwind CSS via CDN. No build step, no install needed.
+     ============================================================ -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  /* Small extras that are awkward to do with pure Tailwind utility classes */
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Hide scrollbar on the horizontal forecast strip but keep it scrollable */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Simple fade-in animation used when new data loads */
+  .fade-in { animation: fadeIn 0.4s ease-in-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Simple spinning loader */
+  .spinner {
+    border: 3px solid rgba(255,255,255,0.15);
+    border-top-color: #38bdf8;
+    border-radius: 50%;
+    width: 22px; height: 22px;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+
+<!--
+  Overall layout: a single centered "phone-width" column (max-w-md) so on
+  desktop it still looks like a native mobile app, not a stretched website.
+-->
+<body class="bg-neutral-950 text-neutral-100 min-h-screen">
+
+  <div class="max-w-md mx-auto min-h-screen flex flex-col relative">
+
+    <!-- ============================================================
+         HEADER: app title + location name (filled in by JS once we
+         know where the user is)
+         ============================================================ -->
+    <header class="px-5 pt-6 pb-4 sticky top-0 z-20 bg-neutral-950/90 backdrop-blur border-b border-neutral-800">
+      <div class="flex items-center justify-between">
+        <div>
+          <h1 class="text-xl font-bold tracking-tight text-white">NearMe</h1>
+          <p id="locationName" class="text-sm text-sky-400 font-medium mt-0.5">Finding your location…</p>
+        </div>
+        <button id="locateBtn" title="Use my current location"
+          class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
+          <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
+            <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>
+            <circle cx="12" cy="10" r="2.5"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- ============================================================
+           MANUAL SEARCH BAR (feature #7)
+           Lets the user type any city name instead of using GPS.
+           ============================================================ -->
+      <form id="searchForm" class="mt-4 flex gap-2 relative" autocomplete="off">
+        <div class="flex-1 relative">
+          <input
+            id="searchInput"
+            type="text"
+            placeholder="Search a city… e.g. Paris, Tokyo"
+            autocomplete="off"
+            class="w-full bg-neutral-800 text-sm text-white placeholder-neutral-500 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+          />
+          <!-- ============================================================
+               AUTOCOMPLETE DROPDOWN
+               Populated live as the user types (see fetchSuggestions in JS).
+               Positioned absolutely so it floats over the content below.
+               ============================================================ -->
+          <ul id="suggestionsList"
+            class="hidden absolute left-0 right-0 top-[calc(100%+6px)] bg-neutral-800 border border-neutral-700 rounded-xl overflow-hidden z-30 shadow-xl max-h-64 overflow-y-auto">
+          </ul>
+        </div>
+        <button type="submit"
+          class="bg-sky-500 hover:bg-sky-400 active:scale-95 transition text-neutral-950 font-semibold text-sm px-4 rounded-xl">
+          Go
+        </button>
+      </form>
+    </header>
+
+    <!-- Global status / error banner -->
+    <div id="statusBanner" class="hidden mx-5 mt-4 text-xs bg-amber-500/10 text-amber-300 border border-amber-500/30 rounded-lg px-3 py-2"></div>
+
+    <main class="px-5 pb-10 flex-1">
+
+      <!-- ============================================================
+           CURRENT WEATHER CARD (feature #4)
+           ============================================================ -->
+      <section id="currentWeatherCard" class="mt-5 rounded-3xl bg-gradient-to-br from-sky-900/60 via-neutral-900 to-neutral-900 border border-neutral-800 p-6">
+        <div id="currentWeatherLoading" class="flex items-center gap-2 text-neutral-400 text-sm">
+          <div class="spinner"></div> Loading current weather…
+        </div>
+        <div id="currentWeatherContent" class="hidden fade-in">
+          <div class="flex items-start justify-between">
+            <div>
+              <p id="currentTemp" class="text-6xl font-bold text-white leading-none">--°</p>
+              <p id="currentCondition" class="text-neutral-300 mt-2 text-sm">--</p>
+            </div>
+            <div id="currentEmoji" class="text-6xl">🌡️</div>
+          </div>
+          <div class="flex gap-4 mt-5 text-sm text-neutral-300">
+            <div class="flex items-center gap-1.5">
+              <span>💨</span> <span id="currentWind">-- km/h</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span>🕒</span> <span id="currentTime">--</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           7-DAY FORECAST — horizontally scrolling strip (feature #5)
+           ============================================================ -->
+      <section class="mt-6">
+        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">7-Day Forecast</h2>
+        <div id="forecastLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
+          <div class="spinner"></div> Loading forecast…
+        </div>
+        <div id="forecastStrip" class="hidden fade-in flex gap-3 overflow-x-auto no-scrollbar pb-1"></div>
+      </section>
+
+      <!-- ============================================================
+           NEARBY LANDMARKS / HISTORICAL PLACES (feature #6)
+           ============================================================ -->
+      <section class="mt-8">
+        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">Nearby Landmarks &amp; History</h2>
+        <p id="landmarksSubtitle" class="hidden text-xs text-neutral-500 -mt-2 mb-3">Distances shown are from your current search location</p>
+        <div id="landmarksLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
+          <div class="spinner"></div> Looking for interesting places nearby…
+        </div>
+        <div id="landmarksList" class="hidden fade-in space-y-3"></div>
+        <p id="landmarksEmpty" class="hidden text-neutral-500 text-sm">No notable Wikipedia entries found within 10km.</p>
+      </section>
+
+      <footer class="mt-10 text-center text-[11px] text-neutral-600 leading-relaxed">
+        Location: Nominatim (OpenStreetMap) · Weather: Open-Meteo · Places: Wikipedia<br/>
+        No API keys, accounts, or tracking used.
+      </footer>
+    </main>
+  </div>
+
+<script>
+/* =====================================================================
+   APP LOGIC
+   Everything below is plain vanilla JavaScript — no build tools,
+   no frameworks besides Tailwind's CSS (loaded above via CDN script).
+   ===================================================================== */
+
+// ---- Grab references to all the DOM elements we'll update ----
+const locationNameEl   = document.getElementById('locationName');
+const statusBanner      = document.getElementById('statusBanner');
+const locateBtn         = document.getElementById('locateBtn');
+const searchForm        = document.getElementById('searchForm');
+const searchInput       = document.getElementById('searchInput');
+const suggestionsList   = document.getElementById('suggestionsList');
+
+const currentWeatherLoading = document.getElementById('currentWeatherLoading');
+const currentWeatherContent = document.getElementById('currentWeatherContent');
+const currentTemp       = document.getElementById('currentTemp');
+const currentCondition  = document.getElementById('currentCondition');
+const currentEmoji      = document.getElementById('currentEmoji');
+const currentWind       = document.getElementById('currentWind');
+const currentTime       = document.getElementById('currentTime');
+
+const forecastLoading   = document.getElementById('forecastLoading');
+const forecastStrip     = document.getElementById('forecastStrip');
+
+const landmarksLoading  = document.getElementById('landmarksLoading');
+const landmarksList     = document.getElementById('landmarksList');
+const landmarksEmpty    = document.getElementById('landmarksEmpty');
+const landmarksSubtitle = document.getElementById('landmarksSubtitle');
+
+// Tracks what the currently-shown distances are measured FROM (either
+// "your current GPS location" or the name of a searched city), so the
+// UI can always be explicit about the reference point instead of just
+// saying a bare "X km away".
+let currentReferenceLabel = 'your location';
+
+// ---------------------------------------------------------------------
+// Helper: show a small warning/info banner at the top of the page
+// ---------------------------------------------------------------------
+function showStatus(message) {
+  statusBanner.textContent = message;
+  statusBanner.classList.remove('hidden');
+}
+function hideStatus() {
+  statusBanner.classList.add('hidden');
+}
+
+// ---------------------------------------------------------------------
+// Helper: map Open-Meteo's numeric "weather_code" to human text + emoji.
+// Open-Meteo uses the WMO weather interpretation codes.
+// ---------------------------------------------------------------------
+const WEATHER_CODE_MAP = {
+  0:  { text: 'Clear sky',                 emoji: '☀️' },
+  1:  { text: 'Mainly clear',               emoji: '🌤️' },
+  2:  { text: 'Partly cloudy',              emoji: '⛅' },
+  3:  { text: 'Overcast',                   emoji: '☁️' },
+  45: { text: 'Fog',                        emoji: '🌫️' },
+  48: { text: 'Depositing rime fog',        emoji: '🌫️' },
+  51: { text: 'Light drizzle',              emoji: '🌦️' },
+  53: { text: 'Moderate drizzle',           emoji: '🌦️' },
+  55: { text: 'Dense drizzle',              emoji: '🌧️' },
+  56: { text: 'Light freezing drizzle',     emoji: '🌧️' },
+  57: { text: 'Dense freezing drizzle',     emoji: '🌧️' },
+  61: { text: 'Slight rain',                emoji: '🌧️' },
+  63: { text: 'Moderate rain',              emoji: '🌧️' },
+  65: { text: 'Heavy rain',                 emoji: '🌧️' },
+  66: { text: 'Light freezing rain',        emoji: '🌧️' },
+  67: { text: 'Heavy freezing rain',        emoji: '🌧️' },
+  71: { text: 'Slight snow fall',           emoji: '🌨️' },
+  73: { text: 'Moderate snow fall',         emoji: '🌨️' },
+  75: { text: 'Heavy snow fall',            emoji: '❄️' },
+  77: { text: 'Snow grains',                emoji: '❄️' },
+  80: { text: 'Slight rain showers',        emoji: '🌦️' },
+  81: { text: 'Moderate rain showers',      emoji: '🌧️' },
+  82: { text: 'Violent rain showers',       emoji: '⛈️' },
+  85: { text: 'Slight snow showers',        emoji: '🌨️' },
+  86: { text: 'Heavy snow showers',         emoji: '❄️' },
+  95: { text: 'Thunderstorm',               emoji: '⛈️' },
+  96: { text: 'Thunderstorm w/ hail',       emoji: '⛈️' },
+  99: { text: 'Thunderstorm w/ heavy hail', emoji: '⛈️' },
+};
+function describeWeatherCode(code) {
+  return WEATHER_CODE_MAP[code] || { text: 'Unknown', emoji: '🌡️' };
+}
+
+// ---------------------------------------------------------------------
+// STEP 1: Get the device's GPS coordinates using the browser's built-in
+// Geolocation API. This triggers the native "allow location?" prompt.
+// (Feature #2)
+// ---------------------------------------------------------------------
+function requestDeviceLocation() {
+  hideStatus();
+  locationNameEl.textContent = 'Finding your location…';
+
+  if (!navigator.geolocation) {
+    showStatus('Your browser does not support geolocation. Try searching a city instead.');
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+      loadEverythingForCoords(latitude, longitude);
+    },
+    (error) => {
+      // Common reasons: user denied permission, or timed out.
+      showStatus('Location permission denied or unavailable. You can search a city below instead.');
+      locationNameEl.textContent = 'Location unavailable';
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+  );
+}
+
+// ---------------------------------------------------------------------
+// STEP 2: Turn GPS coordinates into a readable place name using the
+// free OpenStreetMap Nominatim "reverse geocoding" endpoint.
+// (Feature #3)
+// ---------------------------------------------------------------------
+async function reverseGeocode(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error('Reverse geocoding failed');
+  const data = await res.json();
+  const a = data.address || {};
+  // Try the most specific readable name first, then fall back
+  const place = a.suburb || a.neighbourhood || a.city_district || a.city || a.town || a.village || a.county || data.display_name;
+  const region = a.state || a.country || '';
+  return region && place !== region ? `${place}, ${region}` : place;
+}
+
+// ---------------------------------------------------------------------
+// STEP 2b: Turn a typed city name into coordinates using Nominatim's
+// forward "search" endpoint. Used by the manual search bar. (Feature #7)
+// ---------------------------------------------------------------------
+async function forwardGeocode(query) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error('Search failed');
+  const data = await res.json();
+  if (!data.length) throw new Error('No results found for that city');
+  return {
+    lat: parseFloat(data[0].lat),
+    lon: parseFloat(data[0].lon),
+    label: data[0].display_name.split(',').slice(0, 2).join(',') // short readable label
+  };
+}
+
+// ---------------------------------------------------------------------
+// STEP 3: Fetch current + 7-day weather from Open-Meteo (no key needed).
+// (Features #4 and #5)
+// ---------------------------------------------------------------------
+async function fetchWeather(lat, lon) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+              `&current=temperature_2m,wind_speed_10m,weather_code` +
+              `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+              `&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Weather fetch failed');
+  return res.json();
+}
+
+function renderCurrentWeather(weatherData) {
+  const c = weatherData.current;
+  const info = describeWeatherCode(c.weather_code);
+
+  currentTemp.textContent = `${Math.round(c.temperature_2m)}°C`;
+  currentCondition.textContent = info.text;
+  currentEmoji.textContent = info.emoji;
+  currentWind.textContent = `${Math.round(c.wind_speed_10m)} km/h wind`;
+  currentTime.textContent = new Date(c.time).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+  currentWeatherLoading.classList.add('hidden');
+  currentWeatherContent.classList.remove('hidden');
+}
+
+function renderForecast(weatherData) {
+  const daily = weatherData.daily;
+  forecastStrip.innerHTML = ''; // clear any previous results
+
+  daily.time.forEach((dateStr, i) => {
+    const info = describeWeatherCode(daily.weather_code[i]);
+    const dayLabel = i === 0 ? 'Today' : new Date(dateStr).toLocaleDateString([], { weekday: 'short' });
+
+    const card = document.createElement('div');
+    card.className = 'shrink-0 w-20 flex flex-col items-center gap-1.5 bg-neutral-900 border border-neutral-800 rounded-2xl py-4';
+    card.innerHTML = `
+      <span class="text-xs text-neutral-400 font-medium">${dayLabel}</span>
+      <span class="text-2xl">${info.emoji}</span>
+      <span class="text-sm font-semibold text-white">${Math.round(daily.temperature_2m_max[i])}°</span>
+      <span class="text-xs text-neutral-500">${Math.round(daily.temperature_2m_min[i])}°</span>
+    `;
+    forecastStrip.appendChild(card);
+  });
+
+  forecastLoading.classList.add('hidden');
+  forecastStrip.classList.remove('hidden');
+}
+
+// ---------------------------------------------------------------------
+// STEP 4: Find nearby landmarks / historical points of interest using
+// Wikipedia's free "geosearch" list API, within a 10km (10000m) radius.
+// (Feature #6)
+// ---------------------------------------------------------------------
+async function fetchNearbyLandmarks(lat, lon) {
+  const url = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch` +
+              `&gscoord=${lat}|${lon}&gsradius=10000&gslimit=15&format=json&origin=*`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Wikipedia fetch failed');
+  const data = await res.json();
+  return data.query ? data.query.geosearch : [];
+}
+
+function renderLandmarks(places) {
+  landmarksList.innerHTML = '';
+
+  // Tell the user exactly what point the "X km" figures below are measured from
+  landmarksSubtitle.textContent = `Distances shown are measured from ${currentReferenceLabel}`;
+  landmarksSubtitle.classList.remove('hidden');
+
+  if (!places.length) {
+    landmarksLoading.classList.add('hidden');
+    landmarksEmpty.classList.remove('hidden');
+    return;
+  }
+
+  places.forEach((place) => {
+    const distanceKm = (place.dist / 1000).toFixed(1);
+    const wikiUrl = `https://en.wikipedia.org/?curid=${place.pageid}`;
+    // Google Maps link built straight from the place's own coordinates,
+    // so it drops a pin exactly on the landmark. This uses Google's public
+    // "search by coordinates" URL format — no API key or Places lookup needed.
+    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}`;
+
+    const card = document.createElement('div');
+    card.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3';
+    card.innerHTML = `
+      <p class="text-white font-medium truncate">${place.title}</p>
+      <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${currentReferenceLabel}</p>
+      <div class="flex gap-2 mt-3">
+        <a href="${wikiUrl}" target="_blank" rel="noopener noreferrer"
+           class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">
+          📖 Wikipedia
+        </a>
+        <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer"
+           class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">
+          📍 Google Maps
+        </a>
+      </div>
+    `;
+    landmarksList.appendChild(card);
+  });
+
+  landmarksLoading.classList.add('hidden');
+  landmarksList.classList.remove('hidden');
+}
+
+// ---------------------------------------------------------------------
+// Orchestrator: given ANY lat/lon (whether from GPS or from a search),
+// kick off all three data fetches (place name, weather, landmarks).
+// Each section resets to its own loading state first, and fetches run
+// independently so one failing doesn't block the others.
+// ---------------------------------------------------------------------
+async function loadEverythingForCoords(lat, lon, knownLabel) {
+  hideStatus();
+
+  // Reset all sections to "loading" state
+  currentWeatherLoading.classList.remove('hidden');
+  currentWeatherContent.classList.add('hidden');
+  forecastLoading.classList.remove('hidden');
+  forecastStrip.classList.add('hidden');
+  landmarksLoading.classList.remove('hidden');
+  landmarksList.classList.add('hidden');
+  landmarksEmpty.classList.add('hidden');
+  landmarksSubtitle.classList.add('hidden');
+
+  // 1) Place name (skip the network call if we already have a label from search)
+  if (knownLabel) {
+    locationNameEl.textContent = knownLabel;
+    currentReferenceLabel = knownLabel;
+  } else {
+    currentReferenceLabel = 'your current location';
+    reverseGeocode(lat, lon)
+      .then((name) => {
+        locationNameEl.textContent = name;
+        currentReferenceLabel = 'your current location'; // GPS-based, so keep this phrasing
+      })
+      .catch(() => { locationNameEl.textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)}`; });
+  }
+
+  // 2) Weather (current + forecast)
+  fetchWeather(lat, lon)
+    .then((weatherData) => {
+      renderCurrentWeather(weatherData);
+      renderForecast(weatherData);
+    })
+    .catch(() => {
+      showStatus('Could not load weather data right now. Please try again.');
+      currentWeatherLoading.classList.add('hidden');
+      forecastLoading.classList.add('hidden');
+    });
+
+  // 3) Nearby landmarks
+  fetchNearbyLandmarks(lat, lon)
+    .then(renderLandmarks)
+    .catch(() => {
+      landmarksLoading.classList.add('hidden');
+      landmarksEmpty.textContent = 'Could not load nearby places right now.';
+      landmarksEmpty.classList.remove('hidden');
+    });
+}
+
+// ---------------------------------------------------------------------
+// AUTOCOMPLETE (city suggestions as you type)
+//
+// How the "spelling tolerance" works: Nominatim's search endpoint uses
+// fuzzy trigram matching on the server side, so it already copes with
+// small typos (e.g. "Londun", "Berllin"). We just need to (a) ask it for
+// several candidates per keystroke instead of one, and (b) not fire a
+// request on every single keystroke — we "debounce" so it only fires
+// ~300ms after the user pauses typing, to avoid hammering the free API.
+// ---------------------------------------------------------------------
+
+let debounceTimer = null;
+let activeIndex = -1;      // which suggestion is highlighted via arrow keys
+let currentSuggestions = []; // cache of the last fetched suggestion objects
+
+function debounce(fn, delayMs) {
+  return (...args) => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => fn(...args), delayMs);
+  };
+}
+
+// Ask Nominatim for several possible city matches for the given text.
+async function fetchSuggestions(query) {
+  // namedetails/addressdetails give us cleaner display labels;
+  // limit=6 keeps the dropdown short and the request light.
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}` +
+              `&addressdetails=1&limit=6`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error('Suggestion fetch failed');
+  return res.json();
+}
+
+// Build a short, readable label like "Paris, France" from a Nominatim result
+function shortLabel(result) {
+  const a = result.address || {};
+  const main = a.city || a.town || a.village || a.county || result.display_name.split(',')[0];
+  const region = a.state || a.country || '';
+  return region && region !== main ? `${main}, ${region}` : main;
+}
+
+function renderSuggestions(results) {
+  currentSuggestions = results;
+  activeIndex = -1;
+  suggestionsList.innerHTML = '';
+
+  if (!results.length) {
+    suggestionsList.classList.add('hidden');
+    return;
+  }
+
+  results.forEach((result, i) => {
+    const li = document.createElement('li');
+    li.className = 'px-4 py-2.5 text-sm text-neutral-200 hover:bg-neutral-700 cursor-pointer flex items-center gap-2';
+    li.dataset.index = i;
+    li.innerHTML = `<span>📍</span><span>${shortLabel(result)}</span>`;
+    li.addEventListener('mousedown', (e) => {
+      // mousedown (not click) fires before the input's blur event,
+      // so the dropdown doesn't disappear before we can read the click
+      e.preventDefault();
+      selectSuggestion(result);
+    });
+    suggestionsList.appendChild(li);
+  });
+
+  suggestionsList.classList.remove('hidden');
+}
+
+function highlightActive() {
+  [...suggestionsList.children].forEach((li, i) => {
+    li.classList.toggle('bg-neutral-700', i === activeIndex);
+  });
+}
+
+function closeSuggestions() {
+  suggestionsList.classList.add('hidden');
+  suggestionsList.innerHTML = '';
+  currentSuggestions = [];
+  activeIndex = -1;
+}
+
+// When a suggestion is chosen (click or Enter), load its weather/landmarks
+function selectSuggestion(result) {
+  const label = shortLabel(result);
+  searchInput.value = label;
+  closeSuggestions();
+  hideStatus();
+  loadEverythingForCoords(parseFloat(result.lat), parseFloat(result.lon), label);
+}
+
+// Fire a suggestion lookup whenever the user pauses typing (debounced)
+const debouncedSuggest = debounce(async (query) => {
+  if (query.trim().length < 2) { closeSuggestions(); return; }
+  try {
+    const results = await fetchSuggestions(query.trim());
+    // Ignore stale responses if the input has changed since the request started
+    if (searchInput.value.trim() === query.trim()) {
+      renderSuggestions(results);
+    }
+  } catch {
+    closeSuggestions();
+  }
+}, 300);
+
+searchInput.addEventListener('input', () => {
+  debouncedSuggest(searchInput.value);
+});
+
+// Keyboard navigation: Down/Up to move highlight, Enter to pick, Escape to close
+searchInput.addEventListener('keydown', (e) => {
+  if (suggestionsList.classList.contains('hidden') || !currentSuggestions.length) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    activeIndex = (activeIndex + 1) % currentSuggestions.length;
+    highlightActive();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    activeIndex = (activeIndex - 1 + currentSuggestions.length) % currentSuggestions.length;
+    highlightActive();
+  } else if (e.key === 'Enter' && activeIndex >= 0) {
+    e.preventDefault();
+    selectSuggestion(currentSuggestions[activeIndex]);
+  } else if (e.key === 'Escape') {
+    closeSuggestions();
+  }
+});
+
+// Close the dropdown when tapping/clicking anywhere else on the page
+document.addEventListener('click', (e) => {
+  if (!searchForm.contains(e.target)) closeSuggestions();
+});
+
+// ---------------------------------------------------------------------
+// Wire up the manual search form submit (Feature #7).
+// This covers the case where the user just types and hits "Go" / Enter
+// without picking one of the dropdown suggestions.
+// ---------------------------------------------------------------------
+searchForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const query = searchInput.value.trim();
+  if (!query) return;
+
+  closeSuggestions();
+  hideStatus();
+  locationNameEl.textContent = `Searching for "${query}"…`;
+
+  try {
+    const result = await forwardGeocode(query);
+    loadEverythingForCoords(result.lat, result.lon, result.label);
+  } catch (err) {
+    showStatus(`Could not find "${query}". Try a different spelling.`);
+    locationNameEl.textContent = 'Search a city above';
+  }
+});
+
+// Tapping the pin icon re-requests GPS location
+locateBtn.addEventListener('click', requestDeviceLocation);
+
+// ---------------------------------------------------------------------
+// Register the service worker so browsers consider this an installable
+// PWA (Add to Home Screen / Install App). If this file is opened
+// directly from disk (file://) instead of a real server, registration
+// will silently fail — that's fine, the app still works normally,
+// it just won't be "installable" until it's hosted (e.g. GitHub Pages).
+// ---------------------------------------------------------------------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      // Non-fatal — app still works as a normal web page.
+    });
+  });
+}
+
+// ---------------------------------------------------------------------
+// Kick everything off automatically as soon as the page loads
+// ---------------------------------------------------------------------
+requestDeviceLocation();
+</script>
+</body>
+</html>
