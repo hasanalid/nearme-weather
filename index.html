@@ -136,6 +136,14 @@
               <span>🕒</span> <span id="currentTime">--</span>
             </div>
           </div>
+          <div class="flex gap-4 mt-3 text-sm text-neutral-300">
+            <div class="flex items-center gap-1.5">
+              <span>🌅</span> <span id="currentSunrise">--</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span>🌇</span> <span id="currentSunset">--</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -192,6 +200,8 @@ const currentCondition  = document.getElementById('currentCondition');
 const currentEmoji      = document.getElementById('currentEmoji');
 const currentWind       = document.getElementById('currentWind');
 const currentTime       = document.getElementById('currentTime');
+const currentSunrise    = document.getElementById('currentSunrise');
+const currentSunset     = document.getElementById('currentSunset');
 
 const forecastLoading   = document.getElementById('forecastLoading');
 const forecastStrip     = document.getElementById('forecastStrip');
@@ -325,7 +335,7 @@ async function forwardGeocode(query) {
 async function fetchWeather(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
               `&current=temperature_2m,wind_speed_10m,weather_code` +
-              `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+              `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
               `&timezone=auto`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('Weather fetch failed');
@@ -341,6 +351,11 @@ function renderCurrentWeather(weatherData) {
   currentEmoji.textContent = info.emoji;
   currentWind.textContent = `${Math.round(c.wind_speed_10m)} km/h wind`;
   currentTime.textContent = new Date(c.time).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+  const d = weatherData.daily;
+  const timeOpts = { hour: '2-digit', minute: '2-digit' };
+  currentSunrise.textContent = new Date(d.sunrise[0]).toLocaleTimeString([], timeOpts);
+  currentSunset.textContent = new Date(d.sunset[0]).toLocaleTimeString([], timeOpts);
 
   currentWeatherLoading.classList.add('hidden');
   currentWeatherContent.classList.remove('hidden');
