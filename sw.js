@@ -10,7 +10,7 @@
 // the page "installable" as a PWA.
 // ============================================================
 
-const CACHE_NAME = 'nearme-weather-v1';
+const CACHE_NAME = 'nearme-weather-v2';
 const APP_SHELL = [
   'index.html',
   'manifest.json',
