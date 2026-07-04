@@ -25,6 +25,15 @@
      ============================================================ -->
 <script src="https://cdn.tailwindcss.com"></script>
 
+<!-- ============================================================
+     INGREDIENT SCANNER libraries — both open-source, loaded via CDN
+     (no build step, matching the Tailwind CDN pattern above):
+     - html5-qrcode: camera-based barcode/QR decoding
+     - Tesseract.js: client-side OCR (no API key, runs in-browser)
+     ============================================================ -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
 <style>
   /* Small extras that are awkward to do with pure Tailwind utility classes */
   body {
@@ -69,14 +78,24 @@
           <h1 class="text-xl font-bold tracking-tight text-white">NearMe</h1>
           <p id="locationName" class="text-sm text-sky-400 font-medium mt-0.5">Finding your location…</p>
         </div>
-        <button id="locateBtn" title="Use my current location"
-          class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
-          <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
-            <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>
-            <circle cx="12" cy="10" r="2.5"/>
-          </svg>
-        </button>
+        <div class="flex items-center gap-2">
+          <button id="scanBtn" title="Scan ingredients"
+            class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
+            <!-- Simple camera icon (inline SVG, no external icon library needed) -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 0 1 2-2h1.5l.9-1.5A2 2 0 0 1 9.1 4.5h5.8a2 2 0 0 1 1.7 1l.9 1.5H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/>
+              <circle cx="12" cy="13" r="3.5"/>
+            </svg>
+          </button>
+          <button id="locateBtn" title="Use my current location"
+            class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
+            <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
+              <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>
+              <circle cx="12" cy="10" r="2.5"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- ============================================================
@@ -197,6 +216,89 @@
     </div>
   </div>
 
+  <!-- ============================================================
+       INGREDIENT SCANNER MODAL
+       Opened via the camera icon in the header. Two entry paths:
+       barcode camera scan (primary) or a photographed ingredients
+       label (OCR fallback) — both feed into the same halal keyword
+       screening + cautious result rendering below.
+       ============================================================ -->
+  <div id="scannerModal" class="hidden fixed inset-0 z-50 bg-neutral-950">
+    <div class="max-w-md mx-auto h-full flex flex-col">
+      <div class="flex items-center justify-between px-5 pt-6 pb-4 border-b border-neutral-800 shrink-0">
+        <h2 class="text-white font-semibold text-lg">Ingredient Scanner</h2>
+        <button id="scannerCloseBtn" type="button" title="Close"
+          class="shrink-0 w-9 h-9 rounded-full bg-neutral-800 flex items-center justify-center text-neutral-300 active:scale-95 transition">✕</button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-5 py-4">
+
+        <!-- MODE SELECT: shown first, and again via "Try again" -->
+        <div id="scannerModeSelect" class="space-y-3">
+          <p class="text-sm text-neutral-400">Scan a product barcode, or if there isn't one, photograph the ingredients list instead.</p>
+          <p class="text-xs text-neutral-500 bg-neutral-900/60 border border-neutral-800 rounded-xl px-3 py-2 flex gap-2">
+            <span>📷</span>
+            <span>Camera access here is used only to scan a barcode or photograph an
+              ingredients label. Barcode numbers are sent to Open Food Facts to look
+              up the product; OCR photos are processed entirely on your device and
+              are never uploaded anywhere.</span>
+          </p>
+          <button id="startBarcodeBtn" type="button"
+            class="w-full flex items-center gap-3 bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-4 active:scale-95 transition text-left">
+            <span class="text-2xl">📷</span>
+            <span>
+              <span class="block text-white font-medium text-sm">Scan Barcode</span>
+              <span class="block text-neutral-500 text-xs mt-0.5">Looks up the product in Open Food Facts</span>
+            </span>
+          </button>
+          <button id="startOcrBtn" type="button"
+            class="w-full flex items-center gap-3 bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-4 active:scale-95 transition text-left">
+            <span class="text-2xl">📝</span>
+            <span>
+              <span class="block text-white font-medium text-sm">Photograph Ingredients Text</span>
+              <span class="block text-neutral-500 text-xs mt-0.5">For loose food, or if the barcode isn't found</span>
+            </span>
+          </button>
+        </div>
+
+        <!-- BARCODE CAMERA VIEW -->
+        <div id="barcodeView" class="hidden">
+          <div id="barcodeReaderRegion" class="rounded-2xl overflow-hidden bg-black min-h-[280px]"></div>
+          <p class="text-xs text-neutral-500 mt-3 text-center">Point the camera at the product's barcode</p>
+          <button id="switchToOcrBtn" type="button" class="w-full mt-4 text-sm text-sky-400 underline underline-offset-2">
+            Can't find a barcode? Photograph the ingredients text instead
+          </button>
+        </div>
+
+        <!-- OCR CAPTURE VIEW -->
+        <div id="ocrView" class="hidden text-center">
+          <p class="text-sm text-neutral-400 mb-4">Take a clear, well-lit photo of the ingredients list.</p>
+          <label class="inline-flex flex-col items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-2xl px-6 py-8 cursor-pointer active:scale-95 transition w-full">
+            <span class="text-4xl">📸</span>
+            <span class="text-sm text-sky-400 font-medium">Open Camera</span>
+            <input id="ocrFileInput" type="file" accept="image/*" capture="environment" class="hidden" />
+          </label>
+        </div>
+
+        <!-- LOADING -->
+        <div id="scannerLoading" class="hidden flex flex-col items-center gap-3 py-10 text-neutral-400 text-sm text-center">
+          <div class="spinner"></div>
+          <p id="scannerLoadingText">Looking up product…</p>
+        </div>
+
+        <!-- ERROR -->
+        <div id="scannerError" class="hidden text-center py-6">
+          <p id="scannerErrorText" class="text-amber-300 text-sm mb-4"></p>
+          <button id="scannerRetryBtn" type="button" class="text-sm text-sky-400 underline underline-offset-2">Try again</button>
+        </div>
+
+        <!-- RESULTS -->
+        <div id="scannerResults" class="hidden space-y-4"></div>
+
+      </div>
+    </div>
+  </div>
+
 <script>
 /* =====================================================================
    APP LOGIC
@@ -239,6 +341,26 @@ const hourlyModalList     = document.getElementById('hourlyModalList');
 // Keeps the most recent full Open-Meteo response (current + daily + hourly)
 // around so the hourly modal can read from it without a second network call.
 let lastWeatherData = null;
+
+// ---- Ingredient scanner DOM refs ----
+const scanBtn            = document.getElementById('scanBtn');
+const scannerModal       = document.getElementById('scannerModal');
+const scannerCloseBtn    = document.getElementById('scannerCloseBtn');
+const scannerModeSelect  = document.getElementById('scannerModeSelect');
+const startBarcodeBtn    = document.getElementById('startBarcodeBtn');
+const startOcrBtn        = document.getElementById('startOcrBtn');
+const barcodeView        = document.getElementById('barcodeView');
+const switchToOcrBtn     = document.getElementById('switchToOcrBtn');
+const ocrView            = document.getElementById('ocrView');
+const ocrFileInput       = document.getElementById('ocrFileInput');
+const scannerLoading     = document.getElementById('scannerLoading');
+const scannerLoadingText = document.getElementById('scannerLoadingText');
+const scannerError       = document.getElementById('scannerError');
+const scannerErrorText   = document.getElementById('scannerErrorText');
+const scannerRetryBtn    = document.getElementById('scannerRetryBtn');
+const scannerResults     = document.getElementById('scannerResults');
+
+let html5QrCode = null; // active Html5Qrcode instance while the barcode camera is running
 
 // Tracks what the currently-shown distances are measured FROM (either
 // "your current GPS location" or the name of a searched city), so the
@@ -474,6 +596,289 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !hourlyModal.classList.contains('hidden')) closeHourlyModal();
 });
 currentWeatherContent.addEventListener('click', () => openHourlyModal(0));
+
+// =====================================================================
+// INGREDIENT SCANNER
+//
+// Two entry paths that both end up calling renderScreeningResults():
+//   1. Barcode camera scan (html5-qrcode) -> Open Food Facts lookup
+//   2. Photographed ingredients label (Tesseract.js OCR, client-side)
+//
+// This is a keyword screening AID, not a certification authority — see
+// the disclaimer baked into renderScreeningResults() and CLAUDE.md for
+// why the wording is deliberately non-absolute.
+// =====================================================================
+
+const SCANNER_SECTIONS = [scannerModeSelect, barcodeView, ocrView, scannerLoading, scannerError, scannerResults];
+function showScannerSection(section) {
+  SCANNER_SECTIONS.forEach((el) => el.classList.toggle('hidden', el !== section));
+}
+
+function setScannerLoading(message) {
+  scannerLoadingText.textContent = message;
+  showScannerSection(scannerLoading);
+}
+
+function setScannerError(message) {
+  scannerErrorText.textContent = message;
+  showScannerSection(scannerError);
+}
+
+// Escape any externally-sourced text (Open Food Facts is a public,
+// community-editable database; OCR output is arbitrary) before it's
+// ever inserted via innerHTML, so a malicious product name/ingredient
+// string can't inject markup or scripts.
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : str;
+  return div.innerHTML;
+}
+
+function openScanner() {
+  scannerModal.classList.remove('hidden');
+  showScannerSection(scannerModeSelect);
+}
+
+async function stopBarcodeScanner() {
+  if (html5QrCode) {
+    try { await html5QrCode.stop(); } catch { /* already stopped */ }
+    try { html5QrCode.clear(); } catch { /* nothing rendered yet */ }
+    html5QrCode = null;
+  }
+}
+
+async function closeScanner() {
+  await stopBarcodeScanner();
+  ocrFileInput.value = '';
+  scannerModal.classList.add('hidden');
+}
+
+scanBtn.addEventListener('click', openScanner);
+scannerCloseBtn.addEventListener('click', closeScanner);
+scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerModeSelect));
+
+// ---------------------------------------------------------------------
+// BARCODE MODE: live camera scan via html5-qrcode, then look the
+// decoded barcode up on Open Food Facts (free, keyless, CORS-friendly).
+// ---------------------------------------------------------------------
+async function startBarcodeScan() {
+  showScannerSection(barcodeView);
+  try {
+    html5QrCode = new Html5Qrcode('barcodeReaderRegion');
+    await html5QrCode.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      async (decodedText) => {
+        await stopBarcodeScanner();
+        lookupBarcode(decodedText);
+      },
+      () => { /* per-frame "no code found yet" — expected while aiming, ignore */ }
+    );
+  } catch (err) {
+    setScannerError('Could not access the camera. Check camera permissions and try again, or use the photo option instead.');
+  }
+}
+
+async function lookupBarcode(barcode) {
+  setScannerLoading(`Looking up barcode ${barcode}…`);
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
+    const data = await res.json();
+
+    if (data.status !== 1 || !data.product) {
+      setScannerError(`Barcode ${barcode} wasn't found in Open Food Facts. Try photographing the ingredients text instead.`);
+      return;
+    }
+
+    const product = data.product;
+    const ingredientsText = product.ingredients_text || product.ingredients_text_en || '';
+    const productName = product.product_name || 'Unknown product';
+    const allergens = (product.allergens_tags && product.allergens_tags.length)
+      ? product.allergens_tags.map((a) => a.replace(/^en:/, '')).join(', ')
+      : (product.allergens || '');
+
+    if (!ingredientsText.trim()) {
+      setScannerError(`Found "${productName}" but it has no ingredients text listed in Open Food Facts. Try photographing the ingredients text instead.`);
+      return;
+    }
+
+    renderScreeningResults(ingredientsText, productName, allergens);
+  } catch (err) {
+    setScannerError('Could not reach Open Food Facts right now. Please try again, or use the photo option instead.');
+  }
+}
+
+startBarcodeBtn.addEventListener('click', startBarcodeScan);
+switchToOcrBtn.addEventListener('click', async () => {
+  await stopBarcodeScanner();
+  showScannerSection(ocrView);
+});
+
+// ---------------------------------------------------------------------
+// OCR FALLBACK MODE: capture a photo via the native camera (a plain
+// file input with capture=environment — simpler and more reliable
+// across mobile browsers than hand-building a live-preview capture
+// pipeline), then OCR it entirely client-side with Tesseract.js.
+// ---------------------------------------------------------------------
+startOcrBtn.addEventListener('click', () => showScannerSection(ocrView));
+
+ocrFileInput.addEventListener('change', async () => {
+  const file = ocrFileInput.files && ocrFileInput.files[0];
+  if (!file) return;
+
+  setScannerLoading('Reading ingredients text from photo…');
+  try {
+    const result = await Tesseract.recognize(file, 'eng', {
+      logger: (m) => {
+        if (m.status === 'recognizing text') {
+          setScannerLoading(`Reading ingredients text… ${Math.round(m.progress * 100)}%`);
+        }
+      },
+    });
+    const text = result.data.text.trim();
+    if (!text) {
+      setScannerError('Could not read any text from that photo. Try a clearer, well-lit photo of the ingredients list.');
+      return;
+    }
+    renderScreeningResults(text, null, '');
+  } catch (err) {
+    setScannerError('Something went wrong reading that photo. Please try again.');
+  } finally {
+    ocrFileInput.value = '';
+  }
+});
+
+// ---------------------------------------------------------------------
+// HALAL SCREENING — keyword-based only. This is deliberately NOT a
+// certification: it flags possibilities for the user to verify, and the
+// wording throughout must never claim certainty (see renderScreeningResults).
+// ---------------------------------------------------------------------
+const NON_HALAL_KEYWORDS = [
+  'pork', 'lard', 'bacon', 'ham', 'pancetta', 'prosciutto', 'pepperoni',
+  'pork gelatin', 'gelatin (pork)', 'non-halal gelatin',
+  'ethanol', 'alcohol', 'wine', 'beer', 'rum', 'sherry', 'brandy',
+];
+
+const AMBIGUOUS_KEYWORDS = [
+  { key: 'gelatin',              reason: 'animal source not specified — could be pork, beef, or fish' },
+  { key: 'mono- and diglycerides', reason: 'can be derived from either plant or animal fat' },
+  { key: 'monoglycerides',        reason: 'can be derived from either plant or animal fat' },
+  { key: 'diglycerides',          reason: 'can be derived from either plant or animal fat' },
+  { key: 'whey',                  reason: 'production may involve animal-derived rennet' },
+  { key: 'rennet',                reason: 'often derived from animal enzymes' },
+  { key: 'enzymes',               reason: 'processing aid source is often undisclosed' },
+  { key: 'l-cysteine',            reason: 'can be derived from animal hair/feathers, or made synthetically' },
+  { key: 'natural flavor',        reason: 'the ingredients behind "natural flavor" are rarely disclosed' },
+  { key: 'natural flavour',       reason: 'the ingredients behind "natural flavour" are rarely disclosed' },
+  { key: 'carmine',               reason: 'insect-derived colorant; permissibility is debated among scholars' },
+  { key: 'cochineal',             reason: 'insect-derived colorant; permissibility is debated among scholars' },
+  { key: 'vanilla extract',       reason: 'often uses alcohol as a solvent/carrier' },
+];
+
+// Word-boundary matching instead of plain substring matching, so a short
+// keyword like "ham" doesn't false-positive inside an unrelated word like
+// "chamomile" (which contains "ham" as a substring).
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function containsKeyword(lowerText, keyword) {
+  return new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i').test(lowerText);
+}
+
+// Drop matches that are pure substrings of a longer match already found
+// (e.g. "diglycerides" is contained in "mono- and diglycerides", "pork" is
+// contained in "pork gelatin") — only show the more specific/complete
+// phrase once, so the list doesn't look redundant.
+function dedupSubstringMatches(matches, keyOf) {
+  return matches.filter((match, i) =>
+    !matches.some((other, j) => i !== j && keyOf(other).length > keyOf(match).length && keyOf(other).includes(keyOf(match)))
+  );
+}
+
+function screenIngredients(text) {
+  const lower = text.toLowerCase();
+  const rawNonHalalMatches = NON_HALAL_KEYWORDS.filter((kw) => containsKeyword(lower, kw));
+  const nonHalalMatches = dedupSubstringMatches(rawNonHalalMatches, (kw) => kw);
+
+  // Don't double-flag generic "gelatin" as ambiguous if a more specific
+  // non-halal gelatin phrase already matched it above.
+  const hasSpecificNonHalalGelatin = nonHalalMatches.some((kw) => kw.includes('gelatin'));
+
+  const rawAmbiguousMatches = AMBIGUOUS_KEYWORDS.filter(({ key }) => {
+    if (key === 'gelatin' && hasSpecificNonHalalGelatin) return false;
+    return containsKeyword(lower, key);
+  });
+  const ambiguousMatches = dedupSubstringMatches(rawAmbiguousMatches, ({ key }) => key);
+
+  return { nonHalalMatches, ambiguousMatches };
+}
+
+// Renders the screening results using deliberately cautious, non-absolute
+// language — see CLAUDE.md for why (this is a screening aid, not a halal
+// certification, and must never claim certainty either way).
+function renderScreeningResults(ingredientText, productName, allergens) {
+  const { nonHalalMatches, ambiguousMatches } = screenIngredients(ingredientText);
+  const sections = [];
+
+  if (productName) {
+    sections.push(`<p class="text-white font-semibold">${escapeHtml(productName)}</p>`);
+  }
+
+  if (nonHalalMatches.length) {
+    sections.push(`
+      <div class="bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-3">
+        <p class="text-red-300 text-sm font-medium">⚠️ Potential non-halal ingredients found:</p>
+        <p class="text-red-200 text-sm mt-1">${escapeHtml(nonHalalMatches.join(', '))}</p>
+      </div>
+    `);
+  }
+
+  if (ambiguousMatches.length) {
+    sections.push(`
+      <div class="bg-amber-500/10 border border-amber-500/30 rounded-2xl px-4 py-3">
+        <p class="text-amber-300 text-sm font-medium">🔍 Ambiguous ingredients that need source verification:</p>
+        <ul class="text-amber-200 text-sm mt-1.5 space-y-1 list-disc list-inside">
+          ${ambiguousMatches.map(({ key, reason }) => `<li><span class="font-medium">${escapeHtml(key)}</span> — ${escapeHtml(reason)}</li>`).join('')}
+        </ul>
+      </div>
+    `);
+  }
+
+  if (!nonHalalMatches.length && !ambiguousMatches.length) {
+    sections.push(`
+      <div class="bg-neutral-800/60 border border-neutral-700 rounded-2xl px-4 py-3">
+        <p class="text-neutral-200 text-sm">No flagged ingredients detected in this text.</p>
+      </div>
+    `);
+  }
+
+  if (allergens) {
+    sections.push(`
+      <div class="bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3">
+        <p class="text-neutral-400 text-xs font-medium uppercase tracking-wide">Declared allergens</p>
+        <p class="text-neutral-200 text-sm mt-1">${escapeHtml(allergens)}</p>
+      </div>
+    `);
+  }
+
+  sections.push(`
+    <div class="bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3">
+      <p class="text-neutral-400 text-xs font-medium uppercase tracking-wide mb-1">Extracted ingredient text</p>
+      <p class="text-neutral-300 text-sm whitespace-pre-wrap">${escapeHtml(ingredientText)}</p>
+    </div>
+  `);
+
+  sections.push(`
+    <p class="text-[11px] text-neutral-500 leading-relaxed border-t border-neutral-800 pt-3">
+      This is an automated keyword screening tool, not a halal certification.
+      For certainty, look for an official halal certification mark on the
+      packaging or consult a certified halal authority.
+    </p>
+  `);
+
+  scannerResults.innerHTML = sections.join('');
+  showScannerSection(scannerResults);
+}
 
 // ---------------------------------------------------------------------
 // STEP 4: Find nearby landmarks / historical points of interest using

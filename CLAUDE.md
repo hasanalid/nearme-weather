@@ -2,7 +2,8 @@
 
 ## What this is
 A single-file, client-only mobile web app (PWA) that shows the user's local
-weather, a 7-day forecast, and nearby Wikipedia landmarks — with zero backend,
+weather, a 7-day forecast, nearby Wikipedia landmarks, and a camera-based
+ingredient scanner with halal keyword screening — with zero backend,
 zero accounts, and zero API keys.
 
 ## Files
@@ -35,6 +36,19 @@ zero accounts, and zero API keys.
 - **Google Maps** — link-only, not fetched. Built from lat/lon as
   `https://www.google.com/maps/search/?api=1&query={lat},{lon}` — no API key
   needed for a plain deep link.
+- **Open Food Facts** — `https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
+  — free, keyless, CORS-friendly product lookup by barcode for the
+  ingredient scanner. It's a community-editable database, so its fields
+  (`product_name`, `ingredients_text`, `allergens_tags`) are treated as
+  untrusted text and HTML-escaped before rendering (see `escapeHtml` in
+  the JS) rather than inserted into the DOM raw.
+
+## Libraries used (all open-source, loaded via CDN script tag — no build step)
+- **html5-qrcode** — camera-based barcode/QR decoding for the ingredient
+  scanner's primary path.
+- **Tesseract.js** — client-side OCR (no API key, runs entirely in the
+  browser) for the ingredient scanner's fallback path, used when no
+  barcode is found.
 
 ## Key features already implemented
 1. Mobile-first dark UI (Tailwind CDN)
@@ -64,14 +78,56 @@ zero accounts, and zero API keys.
    location (no UTC offset embedded), so the "Now" comparison shifts the
    real UTC clock by the response's `utc_offset_seconds` and compares as
    strings — don't compare those timestamps directly against `new Date()`.
+10. Ingredient scanner (camera icon in the header) — two entry paths that
+    both feed the same halal keyword screening:
+    - **Barcode mode** (primary): live camera scan via html5-qrcode, then
+      looks the decoded barcode up on Open Food Facts for `product_name`,
+      `ingredients_text`, and `allergens_tags`.
+    - **OCR fallback**: for loose/unpackaged food or a barcode not found
+      in Open Food Facts, the user instead photographs the ingredients
+      label directly (a plain `<input type="file" capture="environment">`
+      — simpler and more reliable across mobile browsers than hand-building
+      a live-preview capture pipeline), and Tesseract.js OCRs it client-side.
+    - Screening matches ingredient text against two keyword lists —
+      `NON_HALAL_KEYWORDS` and `AMBIGUOUS_KEYWORDS` (each with a short
+      reason) — and always shows the raw extracted/ingredient text
+      alongside the flags, plus a persistent non-certification disclaimer.
+      See "Why the cautious result labeling" below before changing any
+      of this wording.
+
+## Why the cautious result labeling (do not weaken this without discussion)
+The ingredient scanner is a **keyword screening aid**, not a halal
+certification authority — it cannot see how an ingredient was actually
+sourced or processed, only whether a flagged word appears in the text.
+Because of that:
+- Never render an absolute claim in either direction. No "Not halal", no
+  "Verified halal", no "Safe to consume", no checkmark implying certainty.
+- Non-halal matches are phrased as "⚠️ Potential non-halal ingredients
+  found: [list]" — a possibility to check, not a verdict.
+- Ambiguous matches are phrased as "🔍 Ambiguous ingredients that need
+  source verification: [list]", each with a short reason why it's
+  ambiguous (e.g. gelatin's animal source isn't specified by the word
+  alone).
+- A clean result is phrased as "No flagged ingredients detected in this
+  text" — explicitly about the text, not a certification of the product.
+- The disclaimer ("This is an automated keyword screening tool, not a
+  halal certification…") must always be shown alongside results, and the
+  raw extracted ingredient text must always be shown too, so the user can
+  read the actual source instead of only trusting the flags.
+This matters because a false "verified halal" claim could cause real harm
+if the wording is ever loosened — keep any future changes to this section
+at least as cautious as what's described here.
 
 ## Why these choices (for context on any future changes)
 - Vanilla JS instead of React/Vue: app has too little state to justify a
   framework or build step, and the brief was "single file, no build tools."
 - Tailwind via CDN instead of compiled Tailwind: same reasoning — zero
   build step, at the cost of a heavier uncompiled CSS payload.
-- These three APIs specifically: they're the rare combination of free +
+- These APIs specifically: they're the rare combination of free +
   keyless + CORS-enabled, matching the "no registration" requirement.
+- html5-qrcode and Tesseract.js instead of a hosted scanning/OCR API:
+  same "no registration, no API keys" requirement — both run entirely
+  client-side and are loaded via plain CDN script tags, no build step.
 
 ## Deployment
 Hosted as a static site on GitHub Pages. All 5 files live at the repo root
@@ -80,8 +136,10 @@ Hosted as a static site on GitHub Pages. All 5 files live at the repo root
 ## When making changes
 - Keep everything in `index.html` unless a change specifically needs a new
   file (e.g. a new icon size).
-- If you touch `sw.js`, bump `CACHE_NAME` (e.g. `nearme-weather-v2`) so
-  browsers don't keep serving a stale cached shell.
+- If you touch `index.html` (or anything else in the app shell), bump
+  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v5`) — otherwise the
+  service worker's cache-first strategy keeps serving whatever it first
+  installed, since the byte-identical `sw.js` never re-triggers install.
 - Preserve the distance-labeling behavior (always state what location
   distances are measured FROM).
 - Preserve copyright/attribution: no API keys should ever be introduced for
