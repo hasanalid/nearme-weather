@@ -79,14 +79,17 @@
           <p id="locationName" class="text-sm text-sky-400 font-medium mt-0.5">Finding your location…</p>
         </div>
         <div class="flex items-center gap-2">
-          <button id="scanBtn" title="Scan ingredients"
-            class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
-            <!-- Simple camera icon (inline SVG, no external icon library needed) -->
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 0 1 2-2h1.5l.9-1.5A2 2 0 0 1 9.1 4.5h5.8a2 2 0 0 1 1.7 1l.9 1.5H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/>
-              <circle cx="12" cy="13" r="3.5"/>
-            </svg>
-          </button>
+          <div class="flex flex-col items-center gap-0.5">
+            <button id="scanBtn" title="Halal Scanner"
+              class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
+              <!-- Simple camera icon (inline SVG, no external icon library needed) -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 0 1 2-2h1.5l.9-1.5A2 2 0 0 1 9.1 4.5h5.8a2 2 0 0 1 1.7 1l.9 1.5H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/>
+                <circle cx="12" cy="13" r="3.5"/>
+              </svg>
+            </button>
+            <span class="text-[9px] leading-tight text-neutral-500 text-center w-14">Halal Scanner</span>
+          </div>
           <button id="locateBtn" title="Use my current location"
             class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
             <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
@@ -226,7 +229,7 @@
   <div id="scannerModal" class="hidden fixed inset-0 z-50 bg-neutral-950">
     <div class="max-w-md mx-auto h-full flex flex-col">
       <div class="flex items-center justify-between px-5 pt-6 pb-4 border-b border-neutral-800 shrink-0">
-        <h2 class="text-white font-semibold text-lg">Ingredient Scanner</h2>
+        <h2 class="text-white font-semibold text-lg">Halal Scanner</h2>
         <button id="scannerCloseBtn" type="button" title="Close"
           class="shrink-0 w-9 h-9 rounded-full bg-neutral-800 flex items-center justify-center text-neutral-300 active:scale-95 transition">✕</button>
       </div>
@@ -634,9 +637,54 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ---------------------------------------------------------------------
+// BACK-BUTTON HANDLING
+//
+// Without this, pressing the browser/hardware back button while the
+// scanner is open navigates the page's history entry from BEFORE the
+// app was ever opened — on a phone that often means the whole PWA feels
+// like it just closed. Instead we push one history entry when the
+// scanner opens, and a popstate handler intercepts back presses to
+// retreat one step inside the scanner (subview/results -> mode select
+// -> fully closed) rather than letting the browser leave the app.
+// ---------------------------------------------------------------------
+let scannerHistoryPushed = false;
+
+function pushScannerHistoryState() {
+  history.pushState({ scannerOpen: true }, '');
+  scannerHistoryPushed = true;
+}
+
+function popScannerHistoryStateIfNeeded() {
+  if (scannerHistoryPushed) {
+    scannerHistoryPushed = false;
+    history.back();
+  }
+}
+
+window.addEventListener('popstate', async () => {
+  if (scannerModal.classList.contains('hidden')) return; // scanner isn't open, nothing to intercept
+  scannerHistoryPushed = false; // this pushed entry was just consumed by the back press itself
+
+  const current = SCANNER_SECTIONS.find((el) => !el.classList.contains('hidden'));
+  if (!current || current === scannerModeSelect) {
+    // Already at the top level of the scanner -> actually close it. No
+    // re-push here, so the next back press behaves normally again.
+    await stopBarcodeScanner();
+    ocrFileInput.value = '';
+    scannerModal.classList.add('hidden');
+  } else {
+    // Retreat one step within the scanner instead of exiting it.
+    if (current === barcodeView) await stopBarcodeScanner();
+    showScannerSection(scannerModeSelect);
+    pushScannerHistoryState(); // keep intercepting back while still inside the scanner
+  }
+});
+
 function openScanner() {
   scannerModal.classList.remove('hidden');
   showScannerSection(scannerModeSelect);
+  pushScannerHistoryState();
 }
 
 async function stopBarcodeScanner() {
@@ -651,6 +699,7 @@ async function closeScanner() {
   await stopBarcodeScanner();
   ocrFileInput.value = '';
   scannerModal.classList.add('hidden');
+  popScannerHistoryStateIfNeeded();
 }
 
 scanBtn.addEventListener('click', openScanner);
@@ -691,7 +740,10 @@ async function lookupBarcode(barcode) {
     }
 
     const product = data.product;
-    const ingredientsText = product.ingredients_text || product.ingredients_text_en || '';
+    // Prefer Open Food Facts' own English field when it has one — only
+    // fall back to translating the raw (possibly non-English) field.
+    const englishFromApi = product.ingredients_text_en || '';
+    const ingredientsText = product.ingredients_text || englishFromApi;
     const productName = product.product_name || 'Unknown product';
     const allergens = (product.allergens_tags && product.allergens_tags.length)
       ? product.allergens_tags.map((a) => a.replace(/^en:/, '')).join(', ')
@@ -702,7 +754,16 @@ async function lookupBarcode(barcode) {
       return;
     }
 
-    renderScreeningResults(ingredientsText, productName, allergens);
+    let englishText = englishFromApi;
+    let translationFailed = false;
+    if (!englishText) {
+      setScannerLoading('Translating ingredients to English…');
+      englishText = await translateToEnglish(ingredientsText);
+      translationFailed = englishText === null;
+      englishText = englishText || ingredientsText;
+    }
+
+    renderScreeningResults({ originalText: ingredientsText, englishText, translationFailed, productName, allergens });
   } catch (err) {
     setScannerError('Could not reach Open Food Facts right now. Please try again, or use the photo option instead.');
   }
@@ -719,7 +780,16 @@ switchToOcrBtn.addEventListener('click', async () => {
 // file input with capture=environment — simpler and more reliable
 // across mobile browsers than hand-building a live-preview capture
 // pipeline), then OCR it entirely client-side with Tesseract.js.
+//
+// Multilingual: ingredient labels aren't always in English, so Tesseract
+// loads several common language packs at once (rather than 'eng' only)
+// to give it a fighting chance at reading the label correctly regardless
+// of language. The recognized text is then translated to English (see
+// translateToEnglish below) before screening, since our keyword lists
+// are English-only.
 // ---------------------------------------------------------------------
+const OCR_LANGUAGES = 'eng+ara+fra+spa+ind'; // English, Arabic, French, Spanish, Indonesian/Malay
+
 startOcrBtn.addEventListener('click', () => showScannerSection(ocrView));
 
 ocrFileInput.addEventListener('change', async () => {
@@ -728,25 +798,76 @@ ocrFileInput.addEventListener('change', async () => {
 
   setScannerLoading('Reading ingredients text from photo…');
   try {
-    const result = await Tesseract.recognize(file, 'eng', {
+    const result = await Tesseract.recognize(file, OCR_LANGUAGES, {
       logger: (m) => {
         if (m.status === 'recognizing text') {
           setScannerLoading(`Reading ingredients text… ${Math.round(m.progress * 100)}%`);
         }
       },
     });
-    const text = result.data.text.trim();
-    if (!text) {
+    const originalText = result.data.text.trim();
+    if (!originalText) {
       setScannerError('Could not read any text from that photo. Try a clearer, well-lit photo of the ingredients list.');
       return;
     }
-    renderScreeningResults(text, null, '');
+
+    setScannerLoading('Translating ingredients to English…');
+    const translated = await translateToEnglish(originalText);
+    const translationFailed = translated === null;
+    const englishText = translated || originalText;
+
+    renderScreeningResults({ originalText, englishText, translationFailed, productName: null, allergens: '' });
   } catch (err) {
     setScannerError('Something went wrong reading that photo. Please try again.');
   } finally {
     ocrFileInput.value = '';
   }
 });
+
+// ---------------------------------------------------------------------
+// TRANSLATION: MyMemory (free, keyless, CORS-friendly) auto-detects the
+// source language and translates to English. Anonymous requests are
+// capped at a few hundred characters each, so long ingredient lists are
+// split into comma-boundary chunks and translated in parallel, then
+// rejoined. Returns null (never throws) on any failure so callers can
+// fall back to screening the original text instead.
+// ---------------------------------------------------------------------
+function chunkTextForTranslation(text, maxLen = 450) {
+  const parts = text.split(',');
+  const chunks = [];
+  let current = '';
+  parts.forEach((part) => {
+    const candidate = current ? `${current},${part}` : part;
+    if (candidate.length > maxLen && current) {
+      chunks.push(current.trim());
+      current = part;
+    } else {
+      current = candidate;
+    }
+  });
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
+async function translateToEnglish(text) {
+  const chunks = chunkTextForTranslation(text);
+  try {
+    const translatedChunks = await Promise.all(
+      chunks.map(async (chunk) => {
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=autodetect|en`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('translation request failed');
+        const data = await res.json();
+        const translated = data && data.responseData && data.responseData.translatedText;
+        if (!translated) throw new Error('no translation returned');
+        return translated;
+      })
+    );
+    return translatedChunks.join(', ');
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------
 // HALAL SCREENING — keyword-based only. This is deliberately NOT a
@@ -815,18 +936,36 @@ function screenIngredients(text) {
 
 // Renders the screening results using deliberately cautious, non-absolute
 // language — see CLAUDE.md for why (this is a screening aid, not a halal
-// certification, and must never claim certainty either way).
-function renderScreeningResults(ingredientText, productName, allergens) {
-  const { nonHalalMatches, ambiguousMatches } = screenIngredients(ingredientText);
+// certification, and must never claim certainty either way). Both the
+// "clearly flagged" and "ambiguous" tiers are styled in the red/warning
+// color family (not a soft amber "FYI" tone) since either one represents
+// real non-halal risk worth a prominent, hard-to-miss visual — but the
+// wording itself stays hedged (no "Haram"/"Not Halal" verdict) per that
+// same principle. See CLAUDE.md "Why the cautious result labeling".
+function renderScreeningResults({ originalText, englishText, translationFailed, productName, allergens }) {
+  const { nonHalalMatches, ambiguousMatches } = screenIngredients(englishText);
+  const hasRisk = nonHalalMatches.length > 0 || ambiguousMatches.length > 0;
   const sections = [];
 
   if (productName) {
     sections.push(`<p class="text-white font-semibold">${escapeHtml(productName)}</p>`);
   }
 
+  // Overall at-a-glance summary banner
+  sections.push(
+    hasRisk
+      ? `<div class="bg-red-600/15 border border-red-600/40 rounded-2xl px-4 py-3">
+           <p class="text-red-300 text-sm font-semibold">⚠️ Warning — please verify before consuming</p>
+           <p class="text-red-200/80 text-xs mt-1">This text contains ingredient(s) that may be non-halal or need source verification — see below.</p>
+         </div>`
+      : `<div class="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-4 py-3">
+           <p class="text-emerald-300 text-sm font-semibold">No flagged ingredients detected in this text.</p>
+         </div>`
+  );
+
   if (nonHalalMatches.length) {
     sections.push(`
-      <div class="bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-3">
+      <div class="bg-red-600/15 border border-red-600/40 rounded-2xl px-4 py-3">
         <p class="text-red-300 text-sm font-medium">⚠️ Potential non-halal ingredients found:</p>
         <p class="text-red-200 text-sm mt-1">${escapeHtml(nonHalalMatches.join(', '))}</p>
       </div>
@@ -835,19 +974,11 @@ function renderScreeningResults(ingredientText, productName, allergens) {
 
   if (ambiguousMatches.length) {
     sections.push(`
-      <div class="bg-amber-500/10 border border-amber-500/30 rounded-2xl px-4 py-3">
-        <p class="text-amber-300 text-sm font-medium">🔍 Ambiguous ingredients that need source verification:</p>
-        <ul class="text-amber-200 text-sm mt-1.5 space-y-1 list-disc list-inside">
+      <div class="bg-orange-500/10 border border-orange-500/40 rounded-2xl px-4 py-3">
+        <p class="text-orange-300 text-sm font-medium">🔍 Ambiguous ingredients that need source verification — please verify:</p>
+        <ul class="text-orange-200 text-sm mt-1.5 space-y-1 list-disc list-inside">
           ${ambiguousMatches.map(({ key, reason }) => `<li><span class="font-medium">${escapeHtml(key)}</span> — ${escapeHtml(reason)}</li>`).join('')}
         </ul>
-      </div>
-    `);
-  }
-
-  if (!nonHalalMatches.length && !ambiguousMatches.length) {
-    sections.push(`
-      <div class="bg-neutral-800/60 border border-neutral-700 rounded-2xl px-4 py-3">
-        <p class="text-neutral-200 text-sm">No flagged ingredients detected in this text.</p>
       </div>
     `);
   }
@@ -861,10 +992,31 @@ function renderScreeningResults(ingredientText, productName, allergens) {
     `);
   }
 
+  if (translationFailed) {
+    sections.push(`
+      <p class="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
+        ⚠️ Automatic translation was unavailable — the results above are based on the original text only. Please double-check manually if it isn't in English.
+      </p>
+    `);
+  }
+
+  // Only show a separate "translated" block if it actually differs from
+  // the original — no need to duplicate when the text was already English.
+  const showTranslation = !translationFailed && englishText.trim().toLowerCase() !== originalText.trim().toLowerCase();
+
+  if (showTranslation) {
+    sections.push(`
+      <div class="bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3">
+        <p class="text-neutral-400 text-xs font-medium uppercase tracking-wide mb-1">Translated to English (used for screening)</p>
+        <p class="text-neutral-300 text-sm whitespace-pre-wrap">${escapeHtml(englishText)}</p>
+      </div>
+    `);
+  }
+
   sections.push(`
     <div class="bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3">
-      <p class="text-neutral-400 text-xs font-medium uppercase tracking-wide mb-1">Extracted ingredient text</p>
-      <p class="text-neutral-300 text-sm whitespace-pre-wrap">${escapeHtml(ingredientText)}</p>
+      <p class="text-neutral-400 text-xs font-medium uppercase tracking-wide mb-1">Extracted ingredient text${showTranslation ? ' (original)' : ''}</p>
+      <p class="text-neutral-300 text-sm whitespace-pre-wrap">${escapeHtml(originalText)}</p>
     </div>
   `);
 
