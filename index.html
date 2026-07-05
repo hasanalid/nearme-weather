@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>NearHalal</title>
+<title>Near Halal</title>
 
 <!-- ============================================================
      PWA SETUP — this is what lets Android/iOS treat this page as
@@ -16,7 +16,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="NearHalal" />
+<meta name="apple-mobile-web-app-title" content="Near Halal" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <link rel="icon" href="icon-192.png" />
 
@@ -74,31 +74,23 @@
          ============================================================ -->
     <header class="px-5 pt-6 pb-4 sticky top-0 z-20 bg-neutral-950/90 backdrop-blur border-b border-neutral-800">
       <div class="flex items-center justify-between">
-        <div>
-          <h1 class="text-xl font-bold tracking-tight text-white">NearHalal</h1>
-          <p id="locationName" class="text-sm text-sky-400 font-medium mt-0.5">Finding your location…</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <div class="flex flex-col items-center gap-0.5">
-            <button id="scanBtn" title="Halal Scanner"
-              class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
-              <!-- Simple camera icon (inline SVG, no external icon library needed) -->
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 0 1 2-2h1.5l.9-1.5A2 2 0 0 1 9.1 4.5h5.8a2 2 0 0 1 1.7 1l.9 1.5H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/>
-                <circle cx="12" cy="13" r="3.5"/>
-              </svg>
-            </button>
-            <span class="text-[9px] leading-tight text-neutral-500 text-center w-14">Halal Scanner</span>
+        <div class="flex items-center gap-2.5">
+          <img src="icon-192.png" alt="" class="w-10 h-10 rounded-xl shadow-lg shadow-emerald-900/20" />
+          <div>
+            <h1 class="text-2xl font-extrabold tracking-tight leading-none">
+              <span class="text-sky-400">Near</span> <span class="text-emerald-400">Halal</span>
+            </h1>
+            <p id="locationName" class="text-sm text-neutral-400 font-medium mt-1">Finding your location…</p>
           </div>
-          <button id="locateBtn" title="Use my current location"
-            class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
-            <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
-              <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>
-              <circle cx="12" cy="10" r="2.5"/>
-            </svg>
-          </button>
         </div>
+        <button id="locateBtn" title="Use my current location"
+          class="shrink-0 w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center active:scale-95 transition">
+          <!-- Simple location pin icon (inline SVG, no external icon library needed) -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-sky-400">
+            <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>
+            <circle cx="12" cy="10" r="2.5"/>
+          </svg>
+        </button>
       </div>
 
       <!-- ============================================================
@@ -367,7 +359,6 @@ let lastWeatherData = null;
 
 // ---- Ingredient scanner DOM refs ----
 const heroScanBtn        = document.getElementById('heroScanBtn');
-const scanBtn            = document.getElementById('scanBtn');
 const scannerModal       = document.getElementById('scannerModal');
 const scannerCloseBtn    = document.getElementById('scannerCloseBtn');
 const scannerModeSelect  = document.getElementById('scannerModeSelect');
@@ -728,7 +719,6 @@ async function closeScanner() {
   popScannerHistoryStateIfNeeded();
 }
 
-scanBtn.addEventListener('click', openScanner);
 heroScanBtn.addEventListener('click', openScanner);
 scannerCloseBtn.addEventListener('click', closeScanner);
 scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerErrorRetryTarget || scannerModeSelect));

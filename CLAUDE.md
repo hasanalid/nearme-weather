@@ -1,16 +1,18 @@
-# NearHalal — Project Context
+# Near Halal — Project Context
 
 ## What this is
-A single-file, client-only mobile web app (PWA) — app name **NearHalal**
+A single-file, client-only mobile web app (PWA) — app name **Near Halal**
 (renamed from "NearMe Weather" once the Halal Scanner became a core
 feature, not just a weather app) — that shows the user's local weather, a
 7-day forecast, nearby Wikipedia landmarks, and a camera-based
 multilingual Halal Scanner with halal keyword screening — with zero
 backend, zero accounts, and zero API keys.
 
-The name **NearHalal** was chosen by the user from four proposed options
-(HalalNear, Halal Compass, NearHalal, HalalScope) once the app grew from
-"weather + landmarks" into also including halal ingredient scanning.
+The name was chosen by the user from four proposed options (HalalNear,
+Halal Compass, NearHalal, HalalScope) once the app grew from "weather +
+landmarks" into also including halal ingredient scanning; a space was
+added afterward ("Near Halal") for readability — everywhere user-facing
+(title, header, manifest), it's two words.
 
 **Note on the repo/URL**: the GitHub repo is intentionally still named
 `nearme-weather` (not renamed to match) so the live GitHub Pages URL
@@ -92,17 +94,29 @@ itself, since that's a URL-breaking change.
   browser) for the ingredient scanner's fallback path, used when no
   barcode is found.
 
+## Header / title design
+The header shows the actual app icon (`icon-192.png`, rendered small,
+`rounded-xl`) next to the wordmark, styled as two colored words —
+`text-sky-400` "Near" + `text-emerald-400` "Halal" — echoing the icon's
+own sky-to-emerald gradient (weather = sky, halal = emerald) instead of
+a single flat white title. `locationName` underneath uses a neutral
+`text-neutral-400` rather than sky, specifically so it doesn't visually
+blend with the sky-colored "Near" directly above it.
+
 ## Home page layout (redesigned)
 Order top-to-bottom is deliberate — do not reorder without discussion:
 1. **Halal Scan hero** — the primary, top-most feature (`#heroScanBtn`),
-   a large tile with icon + label + description, opens the same scanner
-   modal as the header's camera icon (`openScanner`, shared handler).
+   a large tile with icon + label + description, calls `openScanner()`.
 2. **Current weather card** — directly below the hero.
 3. Everything else (7-day forecast, nearby landmarks) follows after,
    in their prior relative order.
-The header's small camera icon + "Halal Scanner" label stays too (it's
-`sticky top-0`), so the scanner is still one tap away once the user has
-scrolled past the hero.
+The header itself intentionally has NO scanner entry point (the
+camera icon + "Halal Scanner" label that used to sit there was removed —
+duplicated the hero's job while adding clutter at the very top of the
+page). `openScanner()` currently has exactly one caller, `heroScanBtn`.
+If a persistent scanner entry point is ever wanted again while scrolled
+past the hero, that's a deliberate product decision to make, not a
+default to restore silently.
 
 ## Key features already implemented
 1. Mobile-first dark UI (Tailwind CDN)
@@ -141,9 +155,10 @@ scrolled past the hero.
    location (no UTC offset embedded), so the "Now" comparison shifts the
    real UTC clock by the response's `utc_offset_seconds` and compares as
    strings — don't compare those timestamps directly against `new Date()`.
-10. **Halal Scanner** (camera icon + visible "Halal Scanner" label in the
-    header, not just a hover tooltip — mobile has no hover) — two entry
-    paths that both feed the same halal keyword screening:
+10. **Halal Scanner** (opened via the "Halal Scan" hero card at the top
+    of the page — see "Home page layout" above; no separate header entry
+    point) — two entry paths that both feed the same halal keyword
+    screening:
     - **Barcode mode** (primary): live camera scan via html5-qrcode, then
       looks the decoded barcode up on Open Food Facts for `product_name`,
       `ingredients_text`, and `allergens_tags`. Prefers OFF's own
@@ -310,7 +325,7 @@ Hosted as a static site on GitHub Pages. All 5 files live at the repo root
 - Keep everything in `index.html` unless a change specifically needs a new
   file (e.g. a new icon size).
 - If you touch `index.html` (or anything else in the app shell), bump
-  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v8`) — otherwise the
+  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v9`) — otherwise the
   service worker's cache-first strategy keeps serving whatever it first
   installed, since the byte-identical `sw.js` never re-triggers install.
 - Preserve the distance-labeling behavior (always state what location

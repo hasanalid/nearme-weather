@@ -1,6 +1,6 @@
 {
-  "name": "NearHalal",
-  "short_name": "NearHalal",
+  "name": "Near Halal",
+  "short_name": "Near Halal",
   "description": "Live local weather, nearby landmarks, and a camera-based halal ingredient scanner — no login required.",
   "start_url": "index.html",
   "scope": ".",
