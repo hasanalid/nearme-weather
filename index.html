@@ -136,6 +136,26 @@
     <main class="px-5 pb-10 flex-1">
 
       <!-- ============================================================
+           HALAL SCAN HERO — the primary, top-most feature. Large tile
+           with strong visual focus, above weather (per redesign spec:
+           "Halal Scan first, weather directly below, everything else
+           after"). Opens the same scanner modal as the header icon.
+           ============================================================ -->
+      <section class="mt-5">
+        <button id="heroScanBtn" type="button"
+          class="w-full flex items-center gap-4 bg-gradient-to-br from-emerald-900/70 via-neutral-900 to-neutral-900 border border-emerald-700/50 rounded-3xl p-5 active:scale-[0.98] transition text-left fade-in">
+          <div class="shrink-0 w-16 h-16 rounded-2xl bg-emerald-500/15 flex items-center justify-center text-4xl">🕌</div>
+          <div class="flex-1 min-w-0">
+            <p class="text-white font-bold text-xl leading-tight">Halal Scan</p>
+            <p class="text-neutral-400 text-sm mt-1">Scan a barcode or photograph ingredients to screen for halal concerns</p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5 text-emerald-400 shrink-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </section>
+
+      <!-- ============================================================
            CURRENT WEATHER CARD (feature #4)
            ============================================================ -->
       <section id="currentWeatherCard" class="mt-5 rounded-3xl bg-gradient-to-br from-sky-900/60 via-neutral-900 to-neutral-900 border border-neutral-800 p-6">
@@ -174,7 +194,7 @@
            7-DAY FORECAST — horizontally scrolling strip (feature #5)
            ============================================================ -->
       <section class="mt-6">
-        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">7-Day Forecast</h2>
+        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><span>📅</span> 7-Day Forecast</h2>
         <div id="forecastLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
           <div class="spinner"></div> Loading forecast…
         </div>
@@ -185,7 +205,7 @@
            NEARBY LANDMARKS / HISTORICAL PLACES (feature #6)
            ============================================================ -->
       <section class="mt-8">
-        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">Nearby Landmarks &amp; History</h2>
+        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><span>📍</span> Nearby Landmarks &amp; History</h2>
         <p id="landmarksSubtitle" class="hidden text-xs text-neutral-500 -mt-2 mb-3">Distances shown are from your current search location</p>
         <div id="landmarksLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
           <div class="spinner"></div> Looking for interesting places nearby…
@@ -346,6 +366,7 @@ const hourlyModalList     = document.getElementById('hourlyModalList');
 let lastWeatherData = null;
 
 // ---- Ingredient scanner DOM refs ----
+const heroScanBtn        = document.getElementById('heroScanBtn');
 const scanBtn            = document.getElementById('scanBtn');
 const scannerModal       = document.getElementById('scannerModal');
 const scannerCloseBtn    = document.getElementById('scannerCloseBtn');
@@ -703,6 +724,7 @@ async function closeScanner() {
 }
 
 scanBtn.addEventListener('click', openScanner);
+heroScanBtn.addEventListener('click', openScanner);
 scannerCloseBtn.addEventListener('click', closeScanner);
 scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerModeSelect));
 
@@ -728,11 +750,24 @@ async function startBarcodeScan() {
   }
 }
 
+// Performance: in-memory only (cleared on reload — no localStorage/
+// sessionStorage, per the app's no-persistence constraint). Rescanning
+// the same barcode or re-translating identical text within one session
+// (e.g. double-checking a product) skips the network round-trip.
+const barcodeCache = new Map();
+
 async function lookupBarcode(barcode) {
   setScannerLoading(`Looking up barcode ${barcode}…`);
   try {
-    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
-    const data = await res.json();
+    const fetchStart = performance.now();
+    const cacheHit = barcodeCache.has(barcode);
+    let data = barcodeCache.get(barcode);
+    if (!data) {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
+      data = await res.json();
+      barcodeCache.set(barcode, data);
+    }
+    console.log(`[Halal Scanner] Barcode lookup (${cacheHit ? 'cache' : 'network'}) took ${Math.round(performance.now() - fetchStart)}ms`);
 
     if (data.status !== 1 || !data.product) {
       setScannerError(`Barcode ${barcode} wasn't found in Open Food Facts. Try photographing the ingredients text instead.`);
@@ -758,12 +793,26 @@ async function lookupBarcode(barcode) {
     let translationFailed = false;
     if (!englishText) {
       setScannerLoading('Translating ingredients to English…');
-      englishText = await translateToEnglish(ingredientsText);
+      const translateStart = performance.now();
+      englishText = await translateToEnglish(ingredientsText, { source: 'barcode', barcode });
+      console.log(`[Halal Scanner] Translation took ${Math.round(performance.now() - translateStart)}ms`);
       translationFailed = englishText === null;
       englishText = englishText || ingredientsText;
     }
 
-    renderScreeningResults({ originalText: ingredientsText, englishText, translationFailed, productName, allergens });
+    // Debug aid for 1.2-style discrepancies: log the exact text this path
+    // screened, so it can be diffed against what an OCR scan of the same
+    // physical package produced.
+    console.log('[Halal Scanner] Barcode path screening text', { barcode, ingredientsText, englishText });
+
+    renderScreeningResults({
+      originalText: ingredientsText,
+      englishText,
+      translationFailed,
+      productName,
+      allergens,
+      source: 'Open Food Facts database — may not exactly match your physical package (regional or batch differences happen). If in doubt, photograph the ingredients label directly instead.',
+    });
   } catch (err) {
     setScannerError('Could not reach Open Food Facts right now. Please try again, or use the photo option instead.');
   }
@@ -790,6 +839,25 @@ switchToOcrBtn.addEventListener('click', async () => {
 // ---------------------------------------------------------------------
 const OCR_LANGUAGES = 'eng+ara+fra+spa+ind'; // English, Arabic, French, Spanish, Indonesian/Malay
 
+// Performance: Tesseract.recognize(file, langs) creates and tears down a
+// full worker (incl. downloading/loading all language data) on every
+// call. Since OCR is by far the slowest step in the pipeline, we create
+// one worker lazily on first use and reuse it for every scan in this
+// session instead of paying that setup cost every time.
+let tesseractWorkerPromise = null;
+function getTesseractWorker() {
+  if (!tesseractWorkerPromise) {
+    tesseractWorkerPromise = Tesseract.createWorker(OCR_LANGUAGES, 1, {
+      logger: (m) => {
+        if (m.status === 'recognizing text') {
+          setScannerLoading(`Reading ingredients text… ${Math.round(m.progress * 100)}%`);
+        }
+      },
+    });
+  }
+  return tesseractWorkerPromise;
+}
+
 startOcrBtn.addEventListener('click', () => showScannerSection(ocrView));
 
 ocrFileInput.addEventListener('change', async () => {
@@ -798,13 +866,10 @@ ocrFileInput.addEventListener('change', async () => {
 
   setScannerLoading('Reading ingredients text from photo…');
   try {
-    const result = await Tesseract.recognize(file, OCR_LANGUAGES, {
-      logger: (m) => {
-        if (m.status === 'recognizing text') {
-          setScannerLoading(`Reading ingredients text… ${Math.round(m.progress * 100)}%`);
-        }
-      },
-    });
+    const ocrStart = performance.now();
+    const worker = await getTesseractWorker();
+    const result = await worker.recognize(file);
+    console.log(`[Halal Scanner] OCR took ${Math.round(performance.now() - ocrStart)}ms`);
     const originalText = result.data.text.trim();
     if (!originalText) {
       setScannerError('Could not read any text from that photo. Try a clearer, well-lit photo of the ingredients list.');
@@ -812,11 +877,24 @@ ocrFileInput.addEventListener('change', async () => {
     }
 
     setScannerLoading('Translating ingredients to English…');
-    const translated = await translateToEnglish(originalText);
+    const translateStart = performance.now();
+    const translated = await translateToEnglish(originalText, { source: 'ocr' });
+    console.log(`[Halal Scanner] Translation took ${Math.round(performance.now() - translateStart)}ms`);
     const translationFailed = translated === null;
     const englishText = translated || originalText;
 
-    renderScreeningResults({ originalText, englishText, translationFailed, productName: null, allergens: '' });
+    // Debug aid for 1.2-style discrepancies: log the exact text this path
+    // screened, so it can be diffed against a barcode scan of the same product.
+    console.log('[Halal Scanner] OCR path screening text', { originalText, englishText });
+
+    renderScreeningResults({
+      originalText,
+      englishText,
+      translationFailed,
+      productName: null,
+      allergens: '',
+      source: 'Photographed label (OCR) — read directly from your physical package.',
+    });
   } catch (err) {
     setScannerError('Something went wrong reading that photo. Please try again.');
   } finally {
@@ -849,22 +927,54 @@ function chunkTextForTranslation(text, maxLen = 450) {
   return chunks;
 }
 
-async function translateToEnglish(text) {
+// Bug fix: MyMemory can return HTTP 200 with a rate-limit/quota WARNING
+// string sitting in responseData.translatedText (e.g. "MYMEMORY WARNING:
+// YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY..."). Treating that
+// as a successful translation was the actual cause of "translation
+// display errors" — the warning text got screened and shown as if it
+// were real ingredient text. Now we validate responseStatus and reject
+// anything that looks like a warning, not just HTTP-level failures.
+function isTranslationWarning(text) {
+  return /MYMEMORY WARNING|QUOTA|INVALID LANGUAGE PAIR/i.test(text);
+}
+
+// Performance: in-memory only (session-scoped, no localStorage/
+// sessionStorage — cleared on reload per the no-persistence constraint).
+// Repeated chunks (common in ingredient lists, e.g. "sugar", "salt")
+// skip the network round-trip entirely on a cache hit.
+const translationCache = new Map();
+
+async function translateToEnglish(text, context = {}) {
   const chunks = chunkTextForTranslation(text);
   try {
     const translatedChunks = await Promise.all(
       chunks.map(async (chunk) => {
+        if (translationCache.has(chunk)) return translationCache.get(chunk);
+
         const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=autodetect|en`;
         const res = await fetch(url);
-        if (!res.ok) throw new Error('translation request failed');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const translated = data && data.responseData && data.responseData.translatedText;
-        if (!translated) throw new Error('no translation returned');
+        if (!data || data.responseStatus !== 200) {
+          throw new Error(`MyMemory responseStatus ${data && data.responseStatus}`);
+        }
+        const translated = data.responseData && data.responseData.translatedText;
+        if (!translated || isTranslationWarning(translated)) {
+          throw new Error('MyMemory returned a quota/warning response instead of a translation');
+        }
+        translationCache.set(chunk, translated);
         return translated;
       })
     );
     return translatedChunks.join(', ');
-  } catch {
+  } catch (err) {
+    // Logged with context (barcode/OCR, product id if known) so a failure
+    // pattern can be isolated later instead of silently guessing.
+    console.error('[Halal Scanner] Translation failed', {
+      ...context,
+      langpair: 'autodetect|en',
+      errorType: err && err.message,
+    });
     return null;
   }
 }
@@ -879,6 +989,19 @@ const NON_HALAL_KEYWORDS = [
   'pork gelatin', 'gelatin (pork)', 'non-halal gelatin',
   'ethanol', 'alcohol', 'wine', 'beer', 'rum', 'sherry', 'brandy',
 ];
+
+// Meat-type detection: a required classification step (not optional) per
+// the spec — meat presence must NEVER silently pass through as "clean"
+// just because none of the keywords above matched. Halal status for any
+// of these depends on the slaughter method (zabiha), which ingredient
+// text alone can never confirm, so every match here always surfaces as
+// "needs verification" rather than being silently ignored. Pork/ham/bacon
+// etc. are intentionally NOT listed here — those are already covered,
+// more severely, by NON_HALAL_KEYWORDS above.
+const MEAT_VERIFICATION_REASON = 'meat ingredient — halal slaughter (zabiha) method cannot be confirmed from ingredient text alone; look for a halal certification mark';
+const MEAT_KEYWORDS = [
+  'beef', 'chicken', 'poultry', 'turkey', 'duck', 'lamb', 'mutton', 'veal', 'goat', 'venison', 'meat',
+].map((key) => ({ key, reason: MEAT_VERIFICATION_REASON }));
 
 const AMBIGUOUS_KEYWORDS = [
   { key: 'gelatin',              reason: 'animal source not specified — could be pork, beef, or fish' },
@@ -931,7 +1054,12 @@ function screenIngredients(text) {
   });
   const ambiguousMatches = dedupSubstringMatches(rawAmbiguousMatches, ({ key }) => key);
 
-  return { nonHalalMatches, ambiguousMatches };
+  // Required step: detect any meat type present. This runs unconditionally
+  // and is never skipped, so meat can never slip through as a silent pass.
+  const rawMeatMatches = MEAT_KEYWORDS.filter(({ key }) => containsKeyword(lower, key));
+  const meatMatches = dedupSubstringMatches(rawMeatMatches, ({ key }) => key);
+
+  return { nonHalalMatches, ambiguousMatches, meatMatches };
 }
 
 // Renders the screening results using deliberately cautious, non-absolute
@@ -942,13 +1070,17 @@ function screenIngredients(text) {
 // real non-halal risk worth a prominent, hard-to-miss visual — but the
 // wording itself stays hedged (no "Haram"/"Not Halal" verdict) per that
 // same principle. See CLAUDE.md "Why the cautious result labeling".
-function renderScreeningResults({ originalText, englishText, translationFailed, productName, allergens }) {
-  const { nonHalalMatches, ambiguousMatches } = screenIngredients(englishText);
-  const hasRisk = nonHalalMatches.length > 0 || ambiguousMatches.length > 0;
+function renderScreeningResults({ originalText, englishText, translationFailed, productName, allergens, source }) {
+  const { nonHalalMatches, ambiguousMatches, meatMatches } = screenIngredients(englishText);
+  const hasRisk = nonHalalMatches.length > 0 || ambiguousMatches.length > 0 || meatMatches.length > 0;
   const sections = [];
 
   if (productName) {
     sections.push(`<p class="text-white font-semibold">${escapeHtml(productName)}</p>`);
+  }
+
+  if (source) {
+    sections.push(`<p class="text-[11px] text-neutral-500">Source: ${escapeHtml(source)}</p>`);
   }
 
   // Overall at-a-glance summary banner
@@ -978,6 +1110,17 @@ function renderScreeningResults({ originalText, englishText, translationFailed, 
         <p class="text-orange-300 text-sm font-medium">🔍 Ambiguous ingredients that need source verification — please verify:</p>
         <ul class="text-orange-200 text-sm mt-1.5 space-y-1 list-disc list-inside">
           ${ambiguousMatches.map(({ key, reason }) => `<li><span class="font-medium">${escapeHtml(key)}</span> — ${escapeHtml(reason)}</li>`).join('')}
+        </ul>
+      </div>
+    `);
+  }
+
+  if (meatMatches.length) {
+    sections.push(`
+      <div class="bg-orange-500/10 border border-orange-500/40 rounded-2xl px-4 py-3">
+        <p class="text-orange-300 text-sm font-medium">🥩 Meat detected — slaughter method needs verification:</p>
+        <ul class="text-orange-200 text-sm mt-1.5 space-y-1 list-disc list-inside">
+          ${meatMatches.map(({ key, reason }) => `<li><span class="font-medium">${escapeHtml(key)}</span> — ${escapeHtml(reason)}</li>`).join('')}
         </ul>
       </div>
     `);

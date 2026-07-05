@@ -47,10 +47,21 @@ zero accounts, and zero API keys.
   non-English `ingredients_text` to English before keyword screening
   (`translateToEnglish` in the JS). Anonymous requests are capped at a few
   hundred characters each, so long ingredient lists are split into
-  comma-boundary chunks (`chunkTextForTranslation`) and rejoined. If
-  translation fails for any reason, screening falls back to the original
-  text and the UI shows an explicit caveat rather than silently screening
-  nothing — see "Why the cautious result labeling" below.
+  comma-boundary chunks (`chunkTextForTranslation`) and rejoined, then
+  cached in-memory per exact chunk (`translationCache`) for the session.
+  If translation fails for any reason, screening falls back to the
+  original text and the UI shows an explicit caveat rather than silently
+  screening nothing — see "Why the cautious result labeling" below.
+  **Known bug fixed**: MyMemory can return HTTP 200 with a rate-limit
+  warning string (e.g. "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE
+  TRANSLATIONS FOR TODAY...") sitting in `responseData.translatedText`.
+  Treating that as a real translation was the actual cause of the
+  "translation display errors" bug report — the warning text got
+  screened and shown as if it were ingredient text. `translateToEnglish`
+  now checks `responseStatus === 200` AND rejects anything matching
+  `isTranslationWarning()` before accepting it as a translation; failures
+  are logged via `console.error('[Halal Scanner] Translation failed', ...)`
+  with context (barcode/OCR source, langpair, error type) for diagnosis.
 
 ## Libraries used (all open-source, loaded via CDN script tag — no build step)
 - **html5-qrcode** — camera-based barcode/QR decoding for the ingredient
@@ -58,6 +69,18 @@ zero accounts, and zero API keys.
 - **Tesseract.js** — client-side OCR (no API key, runs entirely in the
   browser) for the ingredient scanner's fallback path, used when no
   barcode is found.
+
+## Home page layout (redesigned)
+Order top-to-bottom is deliberate — do not reorder without discussion:
+1. **Halal Scan hero** — the primary, top-most feature (`#heroScanBtn`),
+   a large tile with icon + label + description, opens the same scanner
+   modal as the header's camera icon (`openScanner`, shared handler).
+2. **Current weather card** — directly below the hero.
+3. Everything else (7-day forecast, nearby landmarks) follows after,
+   in their prior relative order.
+The header's small camera icon + "Halal Scanner" label stays too (it's
+`sticky top-0`), so the scanner is still one tap away once the user has
+scrolled past the hero.
 
 ## Key features already implemented
 1. Mobile-first dark UI (Tailwind CDN)
@@ -109,12 +132,49 @@ zero accounts, and zero API keys.
       lists are English-only. Both the original and translated text are
       shown to the user (only as two separate blocks when they actually
       differ, to avoid redundant UI when the source was already English).
-    - Screening matches the English text against two keyword lists —
-      `NON_HALAL_KEYWORDS` and `AMBIGUOUS_KEYWORDS` (each with a short
-      reason) — and always shows the raw extracted ingredient text
-      alongside the flags, plus a persistent non-certification disclaimer.
-      See "Why the cautious result labeling" below before changing any
-      of this wording.
+    - Screening matches the English text against three keyword lists —
+      `NON_HALAL_KEYWORDS`, `AMBIGUOUS_KEYWORDS` (each with a short
+      reason), and `MEAT_KEYWORDS` — and always shows the raw extracted
+      ingredient text alongside the flags, plus a persistent
+      non-certification disclaimer. See "Why the cautious result
+      labeling" below before changing any of this wording.
+    - **Mandatory meat-type detection**: `MEAT_KEYWORDS` (beef, chicken,
+      poultry, turkey, duck, lamb, mutton, veal, goat, venison, meat —
+      NOT pork/ham/bacon, which are already covered more severely by
+      `NON_HALAL_KEYWORDS`) runs unconditionally inside `screenIngredients`
+      and is never skipped. Any match always surfaces as a "🥩 Meat
+      detected — slaughter method needs verification" section and always
+      counts toward `hasRisk`, since halal status for these depends on the
+      slaughter method (zabiha), which ingredient text alone can never
+      confirm — meat presence must never silently produce a clean/"no
+      flags" result.
+    - **Barcode vs. OCR verdict differences**: both paths call the exact
+      same `screenIngredients`/`renderScreeningResults` — the
+      classification logic is already unified, so an observed mismatch
+      (e.g. barcode scan flags "doubtful", OCR of the same physical
+      package says "clean") is a data-provenance issue, not divergent
+      logic. The two most likely causes: (1) a translation artifact (see
+      the MyMemory bug above, now fixed) or (2) Open Food Facts'
+      crowd-sourced `ingredients_text` not matching this specific
+      package's actual regional/batch formulation. Both scan flows pass a
+      `source` string into `renderScreeningResults` that's shown in the
+      results ("Source: Open Food Facts database — may not exactly match
+      your physical package..." / "Source: Photographed label (OCR)...")
+      so the user understands why the two can legitimately differ, and
+      both flows log the exact screened text to the console
+      (`console.log('[Halal Scanner] Barcode/OCR path screening text', ...)`)
+      to make a future discrepancy diffable.
+    - **Performance**: OCR (Tesseract.js) is by far the slowest step in
+      the pipeline (client-side neural OCR + language data loading), well
+      ahead of the barcode fetch, translation, or classification steps.
+      Mitigations: a single Tesseract worker is created once
+      (`getTesseractWorker`) and reused for every scan in the session
+      instead of re-initializing per scan; barcode lookups
+      (`barcodeCache`) and translation results (`translationCache`) are
+      cached in-memory per session (not `localStorage`/`sessionStorage` —
+      cleared on reload, consistent with the no-persistence constraint).
+      Each stage logs its duration via `performance.now()` to the console
+      (`[Halal Scanner] OCR took Xms`, etc.) for future profiling.
     - **Back-button handling**: opening the scanner pushes one
       `history.pushState` entry; a `popstate` listener intercepts the
       browser/hardware back button to retreat one step inside the scanner
@@ -186,7 +246,7 @@ Hosted as a static site on GitHub Pages. All 5 files live at the repo root
 - Keep everything in `index.html` unless a change specifically needs a new
   file (e.g. a new icon size).
 - If you touch `index.html` (or anything else in the app shell), bump
-  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v6`) — otherwise the
+  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v7`) — otherwise the
   service worker's cache-first strategy keeps serving whatever it first
   installed, since the byte-identical `sw.js` never re-triggers install.
 - Preserve the distance-labeling behavior (always state what location
