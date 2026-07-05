@@ -1,10 +1,23 @@
-# NearMe Weather — Project Context
+# NearHalal — Project Context
 
 ## What this is
-A single-file, client-only mobile web app (PWA) that shows the user's local
-weather, a 7-day forecast, nearby Wikipedia landmarks, and a camera-based
-multilingual Halal Scanner with halal keyword screening — with zero backend,
-zero accounts, and zero API keys.
+A single-file, client-only mobile web app (PWA) — app name **NearHalal**
+(renamed from "NearMe Weather" once the Halal Scanner became a core
+feature, not just a weather app) — that shows the user's local weather, a
+7-day forecast, nearby Wikipedia landmarks, and a camera-based
+multilingual Halal Scanner with halal keyword screening — with zero
+backend, zero accounts, and zero API keys.
+
+The name **NearHalal** was chosen by the user from four proposed options
+(HalalNear, Halal Compass, NearHalal, HalalScope) once the app grew from
+"weather + landmarks" into also including halal ingredient scanning.
+
+**Note on the repo/URL**: the GitHub repo is intentionally still named
+`nearme-weather` (not renamed to match) so the live GitHub Pages URL
+(`https://hasanalid.github.io/nearme-weather/`) doesn't change and break
+existing links/installed PWA references. Only in-app branding (title,
+header, manifest, icons) was renamed — ask before renaming the repo
+itself, since that's a URL-breaking change.
 
 ## Files
 - `index.html` — the entire app: HTML, Tailwind CSS (via CDN script tag), and
@@ -13,7 +26,16 @@ zero accounts, and zero API keys.
 - `sw.js` — minimal service worker. Caches the app shell only (index.html,
   manifest, icons) for offline installability. Does NOT cache live API
   responses — weather/location data should always be fetched fresh.
-- `icon-192.png`, `icon-512.png` — app icons (dark background, sky-blue pin).
+- `icon-192.png`, `icon-512.png` — app icons: a white location pin (same
+  silhouette as the in-app pin icon, for brand consistency) with a
+  crescent moon inside its head, on a sky-blue-to-emerald diagonal
+  gradient rounded-square background — pin = location/discovery, crescent
+  = halal, gradient ties together the weather (sky) and Halal Scanner
+  (emerald) sections of the app. Generated from an SVG source (not kept
+  in the repo) via `sharp` at 192x192 and 512x512; both are registered as
+  `"purpose": "any maskable"` in `manifest.json`, and the pin+crescent
+  artwork stays within the ~80% safe zone Android's adaptive-icon mask
+  requires.
 
 ## Hard constraints — do not violate these without asking first
 - No npm, no bundler, no build step. Everything must keep running as plain
@@ -88,15 +110,24 @@ scrolled past the hero.
 3. Reverse geocoding to show a readable place name
 4. Current weather (temp, wind, condition text/emoji, sunrise/sunset)
 5. 7-day horizontally scrolling forecast strip
-6. Nearby landmarks grouped into collapsible categories (Parks & Nature,
-   Museums & Culture, Religious Sites, Historic Landmarks, Buildings &
-   Transit, Other Attractions) — classified by keyword-matching each
-   place's Wikipedia short description (`prop=description`, one batched
-   call for all pageids). Collapsed by default so someone in a hurry sees
-   category counts instead of scrolling a long flat list. Each card still
-   has a Wikipedia link AND a Google Maps link, with distance explicitly
-   labeled ("X km from your current location" or "X km from <searched
-   city>")
+6. Nearby landmarks grouped into collapsible categories (Parks &
+   Attractions, Museums & Culture, Religious Sites, Historic Landmarks,
+   Buildings & Transit, Other Places) — classified by keyword-matching
+   each place's Wikipedia short description (`prop=description`, one
+   batched call for all pageids). "Parks & Attractions" deliberately
+   covers both nature (park, garden, forest, lake...) AND
+   entertainment/recreation (theme park, amusement, zoo, aquarium,
+   arcade, fairground, water park...) as one combined category, per the
+   product spec's own framing ("parks, attractions, entertainment venues
+   ... alongside existing categories"). No new API was introduced for
+   this — it reuses the same Wikipedia GeoSearch feed as every other
+   category (see hard constraint: no new API keys), just with a broader
+   keyword list; a dedicated attractions API (Google Places, TripAdvisor,
+   etc.) would require registration/keys and was intentionally avoided.
+   Collapsed by default so someone in a hurry sees category counts
+   instead of scrolling a long flat list. Each card still has a Wikipedia
+   link AND a Google Maps link, with distance explicitly labeled ("X km
+   from your current location" or "X km from <searched city>")
 7. Manual city search bar with debounced (300ms) autocomplete dropdown,
    keyboard navigation (arrows/enter/escape), tolerant of typos via
    Nominatim's built-in fuzzy matching
@@ -122,11 +153,30 @@ scrolled past the hero.
       in Open Food Facts, the user instead photographs the ingredients
       label directly (a plain `<input type="file" capture="environment">`
       — simpler and more reliable across mobile browsers than hand-building
-      a live-preview capture pipeline), and Tesseract.js OCRs it client-side
-      using a multilingual language pack (`OCR_LANGUAGES = 'eng+ara+fra+spa+ind'`
-      — English, Arabic, French, Spanish, Indonesian/Malay; extend this
-      constant if more languages are needed) since ingredient labels
-      aren't always in English.
+      a live-preview capture pipeline). The photo is preprocessed
+      (`preprocessImageForOcr`: downscaled to a max 1600px dimension +
+      grayscale/contrast/brightness boost via canvas) before OCR — both a
+      speed win (fewer pixels) and an accuracy win (better recognition on
+      low-light/low-contrast real-world photos). OCR itself
+      (`runOcr`) tries a fast English-only Tesseract worker first
+      (`OCR_LANGUAGES_FAST = 'eng'`), and only escalates to the full
+      multilingual worker (`OCR_LANGUAGES_FULL = 'eng+ara+fra+spa+ind'` —
+      English, Arabic, French, Spanish, Indonesian/Malay; extend this
+      constant if more languages are needed) if the fast pass' confidence
+      is below `OCR_CONFIDENCE_THRESHOLD` or the text looks like gibberish
+      — keeping the common case (packaging with at least some English)
+      fast while still supporting any language.
+    - **Never show garbled/gibberish text**: `isTextLikelyGibberish()`
+      checks the fraction of Unicode letter/number characters
+      (`\p{L}`/`\p{N}`, any script) vs. total non-whitespace characters —
+      real text in any language is mostly letters; corrupted OCR output
+      skews toward stray symbols. Applied to (a) the raw OCR output
+      (combined with Tesseract's own confidence score) and (b) the
+      translated text (in case OCR was fine but translation produced
+      nonsense). Either check failing shows "This photo was hard to read
+      clearly..." and sends "Try again" straight back to the OCR capture
+      view (`setScannerError(message, ocrView)`) — never displays
+      corrupted text and calls it a result.
     - Whatever text comes out of either path is translated to English via
       MyMemory (`translateToEnglish`) before screening, since the keyword
       lists are English-only. Both the original and translated text are
@@ -167,14 +217,28 @@ scrolled past the hero.
     - **Performance**: OCR (Tesseract.js) is by far the slowest step in
       the pipeline (client-side neural OCR + language data loading), well
       ahead of the barcode fetch, translation, or classification steps.
-      Mitigations: a single Tesseract worker is created once
-      (`getTesseractWorker`) and reused for every scan in the session
-      instead of re-initializing per scan; barcode lookups
-      (`barcodeCache`) and translation results (`translationCache`) are
-      cached in-memory per session (not `localStorage`/`sessionStorage` —
-      cleared on reload, consistent with the no-persistence constraint).
+      Mitigations, in order of impact:
+      1. Image downscaling before OCR (see above) — processing time
+         scales with pixel count, and phone photos are far higher
+         resolution than OCR needs.
+      2. Fast English-first OCR pass, multilingual only as a fallback
+         (see above) — skips loading 4 unnecessary language packs in the
+         common case.
+      3. One Tesseract worker per language set, created once
+         (`getTesseractWorker`, keyed by language string) and reused for
+         every scan in the session instead of re-initializing per scan —
+         measured in preview testing at ~5000ms for a cold first scan vs.
+         ~120ms for a subsequent scan once the worker is warm.
+      4. Barcode lookups (`barcodeCache`) and translation results
+         (`translationCache`) cached in-memory per session (not
+         `localStorage`/`sessionStorage` — cleared on reload, consistent
+         with the no-persistence constraint) — a repeated exact lookup
+         costs ~0ms instead of a network round-trip.
       Each stage logs its duration via `performance.now()` to the console
-      (`[Halal Scanner] OCR took Xms`, etc.) for future profiling.
+      (`[Halal Scanner] OCR took Xms`, etc.) for future profiling. Not
+      pursued: parallelizing translation with classification — they're
+      NOT independent (classification runs on the translated text), so
+      there's nothing to parallelize there.
     - **Back-button handling**: opening the scanner pushes one
       `history.pushState` entry; a `popstate` listener intercepts the
       browser/hardware back button to retreat one step inside the scanner
@@ -246,7 +310,7 @@ Hosted as a static site on GitHub Pages. All 5 files live at the repo root
 - Keep everything in `index.html` unless a change specifically needs a new
   file (e.g. a new icon size).
 - If you touch `index.html` (or anything else in the app shell), bump
-  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v7`) — otherwise the
+  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v8`) — otherwise the
   service worker's cache-first strategy keeps serving whatever it first
   installed, since the byte-identical `sw.js` never re-triggers install.
 - Preserve the distance-labeling behavior (always state what location

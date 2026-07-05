@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>NearMe Weather</title>
+<title>NearHalal</title>
 
 <!-- ============================================================
      PWA SETUP — this is what lets Android/iOS treat this page as
@@ -16,7 +16,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="NearMe" />
+<meta name="apple-mobile-web-app-title" content="NearHalal" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <link rel="icon" href="icon-192.png" />
 
@@ -75,7 +75,7 @@
     <header class="px-5 pt-6 pb-4 sticky top-0 z-20 bg-neutral-950/90 backdrop-blur border-b border-neutral-800">
       <div class="flex items-center justify-between">
         <div>
-          <h1 class="text-xl font-bold tracking-tight text-white">NearMe</h1>
+          <h1 class="text-xl font-bold tracking-tight text-white">NearHalal</h1>
           <p id="locationName" class="text-sm text-sky-400 font-medium mt-0.5">Finding your location…</p>
         </div>
         <div class="flex items-center gap-2">
@@ -643,8 +643,13 @@ function setScannerLoading(message) {
   showScannerSection(scannerLoading);
 }
 
-function setScannerError(message) {
+// retryTarget lets a specific error (e.g. an unreadable photo) send the
+// user straight back to the OCR capture view instead of the top-level
+// mode select, so "retake the photo" is a single tap.
+let scannerErrorRetryTarget = null;
+function setScannerError(message, retryTarget = scannerModeSelect) {
   scannerErrorText.textContent = message;
+  scannerErrorRetryTarget = retryTarget;
   showScannerSection(scannerError);
 }
 
@@ -726,7 +731,7 @@ async function closeScanner() {
 scanBtn.addEventListener('click', openScanner);
 heroScanBtn.addEventListener('click', openScanner);
 scannerCloseBtn.addEventListener('click', closeScanner);
-scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerModeSelect));
+scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerErrorRetryTarget || scannerModeSelect));
 
 // ---------------------------------------------------------------------
 // BARCODE MODE: live camera scan via html5-qrcode, then look the
@@ -795,6 +800,10 @@ async function lookupBarcode(barcode) {
       setScannerLoading('Translating ingredients to English…');
       const translateStart = performance.now();
       englishText = await translateToEnglish(ingredientsText, { source: 'barcode', barcode });
+      if (englishText && isTextLikelyGibberish(englishText)) {
+        console.error('[Halal Scanner] Translation output looked like gibberish, discarding', { barcode, ingredientsText, englishText });
+        englishText = null;
+      }
       console.log(`[Halal Scanner] Translation took ${Math.round(performance.now() - translateStart)}ms`);
       translationFailed = englishText === null;
       englishText = englishText || ingredientsText;
@@ -830,24 +839,26 @@ switchToOcrBtn.addEventListener('click', async () => {
 // across mobile browsers than hand-building a live-preview capture
 // pipeline), then OCR it entirely client-side with Tesseract.js.
 //
-// Multilingual: ingredient labels aren't always in English, so Tesseract
-// loads several common language packs at once (rather than 'eng' only)
-// to give it a fighting chance at reading the label correctly regardless
-// of language. The recognized text is then translated to English (see
-// translateToEnglish below) before screening, since our keyword lists
-// are English-only.
+// Performance strategy: OCR is by far the slowest step in the pipeline.
+// Two things cut typical scan time substantially:
+//   1. Downscaling + contrast-boosting the photo before OCR (see
+//      preprocessImageForOcr) — fewer pixels to process, and better
+//      recognition on low-light/low-contrast real-world photos.
+//   2. Trying a FAST English-only pass first (most packaging is at least
+//      partly in English), only escalating to the full multilingual
+//      worker if that pass looks unreliable — see runOcr below. This
+//      keeps the common case fast while still supporting any language.
 // ---------------------------------------------------------------------
-const OCR_LANGUAGES = 'eng+ara+fra+spa+ind'; // English, Arabic, French, Spanish, Indonesian/Malay
+const OCR_LANGUAGES_FAST = 'eng';
+const OCR_LANGUAGES_FULL = 'eng+ara+fra+spa+ind'; // English, Arabic, French, Spanish, Indonesian/Malay
+const OCR_CONFIDENCE_THRESHOLD = 55; // Tesseract's 0-100 mean confidence
 
-// Performance: Tesseract.recognize(file, langs) creates and tears down a
-// full worker (incl. downloading/loading all language data) on every
-// call. Since OCR is by far the slowest step in the pipeline, we create
-// one worker lazily on first use and reuse it for every scan in this
-// session instead of paying that setup cost every time.
-let tesseractWorkerPromise = null;
-function getTesseractWorker() {
-  if (!tesseractWorkerPromise) {
-    tesseractWorkerPromise = Tesseract.createWorker(OCR_LANGUAGES, 1, {
+// One worker per language set, created lazily and reused for the rest of
+// the session (worker creation + language-data loading is expensive).
+const tesseractWorkers = {};
+function getTesseractWorker(langs) {
+  if (!tesseractWorkers[langs]) {
+    tesseractWorkers[langs] = Tesseract.createWorker(langs, 1, {
       logger: (m) => {
         if (m.status === 'recognizing text') {
           setScannerLoading(`Reading ingredients text… ${Math.round(m.progress * 100)}%`);
@@ -855,7 +866,71 @@ function getTesseractWorker() {
       },
     });
   }
-  return tesseractWorkerPromise;
+  return tesseractWorkers[langs];
+}
+
+// Downscale to a max dimension (typical phone photos are far higher
+// resolution than OCR needs, and processing time scales with pixel
+// count) and boost contrast/grayscale (helps with low-light, low-contrast,
+// and slightly reflective packaging photos).
+async function preprocessImageForOcr(file) {
+  const img = new Image();
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.filter = 'grayscale(1) contrast(1.3) brightness(1.05)';
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    return blob || file; // fall back to the original file if toBlob ever fails
+  } catch {
+    return file; // preprocessing is a best-effort optimization, never block the scan on it
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+// Gibberish detection: the fraction of non-whitespace characters that are
+// actual letters/numbers (any script, via the Unicode \p{L}/\p{N}
+// properties) vs. symbols/noise. Real ingredient text — in any language —
+// is mostly letters; heavily garbled OCR output skews toward stray
+// punctuation/symbols. Used to catch bad OCR AND bad translations before
+// ever showing them to the user.
+function isTextLikelyGibberish(text) {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return true;
+  const nonSpace = trimmed.replace(/\s/g, '');
+  if (!nonSpace) return true;
+  const wordChars = (nonSpace.match(/[\p{L}\p{N}]/gu) || []).length;
+  return wordChars / nonSpace.length < 0.6;
+}
+
+// Runs OCR with the fast English-only worker first; escalates to the
+// full multilingual worker only if the fast pass looks unreliable (low
+// confidence or gibberish-looking text), since loading+running the
+// multilingual pack is meaningfully slower.
+async function runOcr(imageBlob) {
+  const fastWorker = await getTesseractWorker(OCR_LANGUAGES_FAST);
+  let result = await fastWorker.recognize(imageBlob);
+
+  if (result.data.confidence < OCR_CONFIDENCE_THRESHOLD || isTextLikelyGibberish(result.data.text)) {
+    console.log(`[Halal Scanner] Fast English OCR pass unreliable (confidence ${result.data.confidence}) — retrying with full multilingual set`);
+    setScannerLoading('Trying again with broader language support…');
+    const fullWorker = await getTesseractWorker(OCR_LANGUAGES_FULL);
+    const fullResult = await fullWorker.recognize(imageBlob);
+    if (fullResult.data.confidence >= result.data.confidence) result = fullResult;
+  }
+
+  return result;
 }
 
 startOcrBtn.addEventListener('click', () => showScannerSection(ocrView));
@@ -864,21 +939,36 @@ ocrFileInput.addEventListener('change', async () => {
   const file = ocrFileInput.files && ocrFileInput.files[0];
   if (!file) return;
 
-  setScannerLoading('Reading ingredients text from photo…');
+  setScannerLoading('Processing photo…');
   try {
     const ocrStart = performance.now();
-    const worker = await getTesseractWorker();
-    const result = await worker.recognize(file);
-    console.log(`[Halal Scanner] OCR took ${Math.round(performance.now() - ocrStart)}ms`);
+    const processedImage = await preprocessImageForOcr(file);
+    setScannerLoading('Reading ingredients text from photo…');
+    const result = await runOcr(processedImage);
+    console.log(`[Halal Scanner] OCR took ${Math.round(performance.now() - ocrStart)}ms (confidence ${result.data.confidence})`);
+
     const originalText = result.data.text.trim();
-    if (!originalText) {
-      setScannerError('Could not read any text from that photo. Try a clearer, well-lit photo of the ingredients list.');
+    const unreadable = !originalText
+      || result.data.confidence < OCR_CONFIDENCE_THRESHOLD
+      || isTextLikelyGibberish(originalText);
+
+    if (unreadable) {
+      setScannerError(
+        "This photo was hard to read clearly, so we won't guess. Please retake it with good lighting, hold the camera steady, flatten curved packaging if you can, and make sure the ingredients text fills the frame.",
+        ocrView
+      );
       return;
     }
 
     setScannerLoading('Translating ingredients to English…');
     const translateStart = performance.now();
-    const translated = await translateToEnglish(originalText, { source: 'ocr' });
+    let translated = await translateToEnglish(originalText, { source: 'ocr' });
+    // Validate the translation itself too — a garbled OCR pass can still
+    // slip past the check above and produce a nonsensical "translation".
+    if (translated && isTextLikelyGibberish(translated)) {
+      console.error('[Halal Scanner] Translation output looked like gibberish, discarding', { originalText, translated });
+      translated = null;
+    }
     console.log(`[Halal Scanner] Translation took ${Math.round(performance.now() - translateStart)}ms`);
     const translationFailed = translated === null;
     const englishText = translated || originalText;
@@ -896,7 +986,7 @@ ocrFileInput.addEventListener('change', async () => {
       source: 'Photographed label (OCR) — read directly from your physical package.',
     });
   } catch (err) {
-    setScannerError('Something went wrong reading that photo. Please try again.');
+    setScannerError('Something went wrong reading that photo. Please try again.', ocrView);
   } finally {
     ocrFileInput.value = '';
   }
@@ -1219,12 +1309,12 @@ async function fetchNearbyLandmarks(lat, lon) {
 // category counts instead of scrolling a long flat list.
 // ---------------------------------------------------------------------
 const LANDMARK_CATEGORIES = [
-  { key: 'parks',     label: 'Parks & Nature',       emoji: '🌳', keywords: ['park', 'garden', 'nature reserve', 'forest', 'lake', 'mountain', 'trail', 'botanical', 'beach', 'wood'] },
+  { key: 'parks',     label: 'Parks & Attractions',  emoji: '🎡', keywords: ['park', 'garden', 'nature reserve', 'forest', 'lake', 'mountain', 'trail', 'botanical', 'beach', 'wood', 'theme park', 'amusement', 'zoo', 'aquarium', 'arcade', 'entertainment', 'fairground', 'water park', 'resort'] },
   { key: 'museums',   label: 'Museums & Culture',    emoji: '🖼️', keywords: ['museum', 'gallery', 'theatre', 'theater', 'exhibit', 'cultural', 'art'] },
   { key: 'religious', label: 'Religious Sites',      emoji: '⛪', keywords: ['church', 'cathedral', 'temple', 'mosque', 'synagogue', 'shrine', 'basilica', 'chapel', 'abbey'] },
   { key: 'landmarks', label: 'Historic Landmarks',   emoji: '🏛️', keywords: ['historic', 'monument', 'memorial', 'castle', 'fort', 'ruins', 'archaeological', 'heritage', 'palace', 'tomb'] },
   { key: 'transit',   label: 'Buildings & Transit',  emoji: '🏢', keywords: ['station', 'bridge', 'tower', 'building', 'skyscraper', 'airport', 'stadium'] },
-  { key: 'other',     label: 'Other Attractions',    emoji: '📍', keywords: [] }, // catch-all, must stay last
+  { key: 'other',     label: 'Other Places',         emoji: '📍', keywords: [] }, // catch-all, must stay last
 ];
 
 function classifyLandmark(place) {

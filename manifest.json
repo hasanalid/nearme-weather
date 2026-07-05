@@ -1,7 +1,7 @@
 {
-  "name": "NearMe Weather",
-  "short_name": "NearMe",
-  "description": "Live local weather, 7-day forecast, and nearby landmarks — no login required.",
+  "name": "NearHalal",
+  "short_name": "NearHalal",
+  "description": "Live local weather, nearby landmarks, and a camera-based halal ingredient scanner — no login required.",
   "start_url": "index.html",
   "scope": ".",
   "display": "standalone",
