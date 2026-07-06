@@ -194,21 +194,38 @@
       </section>
 
       <!-- ============================================================
-           NEARBY LANDMARKS / HISTORICAL PLACES (feature #6)
+           NEARBY PLACES — Parks, Outdoor Activities, Restaurants Near Me.
+           Sourced from OpenStreetMap via the backend's Overpass-based
+           PlacesProvider (free, keyless). Restaurants additionally get an
+           evidence-based halal classification (RestaurantHalalVerifier) —
+           never a certainty claim, always "please verify" unless
+           Halal Confirmed. (feature #6, replaces the old Wikipedia-based
+           landmarks list)
            ============================================================ -->
       <section class="mt-8">
-        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><span>📍</span> Nearby Landmarks &amp; History</h2>
-        <p id="landmarksSubtitle" class="hidden text-xs text-neutral-500 -mt-2 mb-3">Distances shown are from your current search location</p>
-        <div id="landmarksLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
-          <div class="spinner"></div> Looking for interesting places nearby…
+        <h2 class="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><span>📍</span> Nearby Places</h2>
+
+        <div class="flex gap-2 mb-3 overflow-x-auto no-scrollbar">
+          <button type="button" data-category="parks" class="place-tab shrink-0 px-4 py-2 rounded-full text-sm font-medium bg-sky-500 text-neutral-950 transition">🌳 Parks</button>
+          <button type="button" data-category="outdoor" class="place-tab shrink-0 px-4 py-2 rounded-full text-sm font-medium bg-neutral-800 text-neutral-300 transition">🏃 Outdoor Activities</button>
+          <button type="button" data-category="restaurants" class="place-tab shrink-0 px-4 py-2 rounded-full text-sm font-medium bg-neutral-800 text-neutral-300 transition">🍽️ Restaurants Near Me</button>
         </div>
-        <div id="landmarksList" class="hidden fade-in space-y-3"></div>
-        <p id="landmarksEmpty" class="hidden text-neutral-500 text-sm">No notable Wikipedia entries found within 10km.</p>
+
+        <p id="restaurantDisclaimer" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3">
+          Halal status is based on available public data and may be incomplete. Please verify directly with the restaurant before visiting.
+        </p>
+        <p id="placesSubtitle" class="hidden text-xs text-neutral-500 mb-3">Distances shown are from your current search location</p>
+
+        <div id="placesLoading" class="flex items-center gap-2 text-neutral-500 text-sm">
+          <div class="spinner"></div> Looking for nearby places…
+        </div>
+        <div id="placesList" class="hidden fade-in space-y-3"></div>
+        <p id="placesEmpty" class="hidden text-neutral-500 text-sm">No places found nearby.</p>
       </section>
 
       <footer class="mt-10 text-center text-[11px] text-neutral-600 leading-relaxed">
-        Location: Nominatim (OpenStreetMap) · Weather: Open-Meteo · Places: Wikipedia<br/>
-        No API keys, accounts, or tracking used.
+        Location &amp; Places: OpenStreetMap contributors (Nominatim, Overpass) · Weather: Open-Meteo · Products: Open Food Facts<br/>
+        No API keys required for these free/open data providers.
       </footer>
     </main>
   </div>
@@ -254,9 +271,11 @@
           <p class="text-xs text-neutral-500 bg-neutral-900/60 border border-neutral-800 rounded-xl px-3 py-2 flex gap-2">
             <span>📷</span>
             <span>Camera access here is used only to scan a barcode or photograph an
-              ingredients label. Barcode numbers are sent to Open Food Facts to look
-              up the product; OCR photos are processed entirely on your device and
-              are never uploaded anywhere.</span>
+              ingredients label. Barcode numbers are sent to our backend, which looks
+              the product up on Open Food Facts; OCR photos are processed entirely on
+              your device and are never uploaded anywhere — only the extracted text is
+              sent (to our backend for screening, and to a translation service if
+              needed).</span>
           </p>
           <button id="startBarcodeBtn" type="button"
             class="w-full flex items-center gap-3 bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-4 active:scale-95 transition text-left">
@@ -342,10 +361,12 @@ const currentSunset     = document.getElementById('currentSunset');
 const forecastLoading   = document.getElementById('forecastLoading');
 const forecastStrip     = document.getElementById('forecastStrip');
 
-const landmarksLoading  = document.getElementById('landmarksLoading');
-const landmarksList     = document.getElementById('landmarksList');
-const landmarksEmpty    = document.getElementById('landmarksEmpty');
-const landmarksSubtitle = document.getElementById('landmarksSubtitle');
+const placesLoading      = document.getElementById('placesLoading');
+const placesList         = document.getElementById('placesList');
+const placesEmpty        = document.getElementById('placesEmpty');
+const placesSubtitle     = document.getElementById('placesSubtitle');
+const restaurantDisclaimer = document.getElementById('restaurantDisclaimer');
+const placeTabs          = document.querySelectorAll('.place-tab');
 
 const hourlyModal        = document.getElementById('hourlyModal');
 const hourlyModalBackdrop = document.getElementById('hourlyModalBackdrop');
@@ -461,62 +482,50 @@ function requestDeviceLocation() {
 }
 
 // ---------------------------------------------------------------------
-// STEP 2: Turn GPS coordinates into a readable place name using the
-// free OpenStreetMap Nominatim "reverse geocoding" endpoint.
-// (Feature #3)
+// STEP 2: Turn GPS coordinates into a readable place name via our
+// backend's /api/geocode endpoint (backend provider: Nominatim,
+// OpenStreetMap — see backend/src/providers/geocoding). (Feature #3)
 // ---------------------------------------------------------------------
 async function reverseGeocode(lat, lon) {
-  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  const res = await fetch(`/api/geocode?lat=${lat}&lon=${lon}`);
   if (!res.ok) throw new Error('Reverse geocoding failed');
   const data = await res.json();
-  const a = data.address || {};
-  // Try the most specific readable name first, then fall back
-  const place = a.suburb || a.neighbourhood || a.city_district || a.city || a.town || a.village || a.county || data.display_name;
-  const region = a.state || a.country || '';
-  return region && place !== region ? `${place}, ${region}` : place;
+  const result = data.results && data.results[0];
+  if (!result) throw new Error('No result');
+  return result.label;
 }
 
 // ---------------------------------------------------------------------
-// STEP 2b: Turn a typed city name into coordinates using Nominatim's
-// forward "search" endpoint. Used by the manual search bar. (Feature #7)
+// STEP 2b: Turn a typed city name into coordinates via the same
+// /api/geocode endpoint. Used by the manual search bar. (Feature #7)
 // ---------------------------------------------------------------------
 async function forwardGeocode(query) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}&limit=1`);
   if (!res.ok) throw new Error('Search failed');
   const data = await res.json();
-  if (!data.length) throw new Error('No results found for that city');
-  return {
-    lat: parseFloat(data[0].lat),
-    lon: parseFloat(data[0].lon),
-    label: data[0].display_name.split(',').slice(0, 2).join(',') // short readable label
-  };
+  if (!data.results || !data.results.length) throw new Error('No results found for that city');
+  return data.results[0]; // already { lat, lon, label, address } from the backend
 }
 
 // ---------------------------------------------------------------------
-// STEP 3: Fetch current + 7-day weather from Open-Meteo (no key needed).
-// (Features #4 and #5)
+// STEP 3: Fetch current + 7-day + hourly weather via our backend's
+// /api/weather endpoint (backend provider: Open-Meteo, free/keyless —
+// see backend/src/providers/weather). (Features #4 and #5)
 // ---------------------------------------------------------------------
 async function fetchWeather(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-              `&current=temperature_2m,wind_speed_10m,weather_code` +
-              `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
-              `&hourly=temperature_2m,weather_code,precipitation_probability` +
-              `&timezone=auto`;
-  const res = await fetch(url);
+  const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
   if (!res.ok) throw new Error('Weather fetch failed');
   return res.json();
 }
 
 function renderCurrentWeather(weatherData) {
   const c = weatherData.current;
-  const info = describeWeatherCode(c.weather_code);
+  const info = describeWeatherCode(c.weatherCode);
 
-  currentTemp.textContent = `${Math.round(c.temperature_2m)}°C`;
+  currentTemp.textContent = `${Math.round(c.temperatureC)}°C`;
   currentCondition.textContent = info.text;
   currentEmoji.textContent = info.emoji;
-  currentWind.textContent = `${Math.round(c.wind_speed_10m)} km/h wind`;
+  currentWind.textContent = `${Math.round(c.windKmh)} km/h wind`;
   currentTime.textContent = new Date(c.time).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
   const d = weatherData.daily;
@@ -533,7 +542,7 @@ function renderForecast(weatherData) {
   forecastStrip.innerHTML = ''; // clear any previous results
 
   daily.time.forEach((dateStr, i) => {
-    const info = describeWeatherCode(daily.weather_code[i]);
+    const info = describeWeatherCode(daily.weatherCode[i]);
     const dayLabel = i === 0 ? 'Today' : new Date(dateStr).toLocaleDateString([], { weekday: 'short' });
 
     const card = document.createElement('div');
@@ -542,8 +551,8 @@ function renderForecast(weatherData) {
     card.innerHTML = `
       <span class="text-xs text-neutral-400 font-medium">${dayLabel}</span>
       <span class="text-2xl">${info.emoji}</span>
-      <span class="text-sm font-semibold text-white">${Math.round(daily.temperature_2m_max[i])}°</span>
-      <span class="text-xs text-neutral-500">${Math.round(daily.temperature_2m_min[i])}°</span>
+      <span class="text-sm font-semibold text-white">${Math.round(daily.tempMaxC[i])}°</span>
+      <span class="text-xs text-neutral-500">${Math.round(daily.tempMinC[i])}°</span>
     `;
     card.addEventListener('click', () => openHourlyModal(i));
     forecastStrip.appendChild(card);
@@ -577,15 +586,15 @@ function openHourlyModal(dayIndex) {
   // the browser's timezone differs from the location's. Instead, shift
   // real UTC "now" by the location's utc_offset_seconds and compare as
   // strings — that keeps everything in the same naive-local representation.
-  const nowLocalStr = new Date(Date.now() + (lastWeatherData.utc_offset_seconds || 0) * 1000).toISOString();
+  const nowLocalStr = new Date(Date.now() + (lastWeatherData.utcOffsetSeconds || 0) * 1000).toISOString();
 
   hourly.time.forEach((t, i) => {
     if (!t.startsWith(dateStr)) return; // only this day's 24 hours
 
-    const info = describeWeatherCode(hourly.weather_code[i]);
+    const info = describeWeatherCode(hourly.weatherCode[i]);
     const hourDate = new Date(t);
     const isCurrentHour = dayIndex === 0 && t.slice(0, 13) === nowLocalStr.slice(0, 13);
-    const precip = hourly.precipitation_probability ? hourly.precipitation_probability[i] : null;
+    const precip = hourly.precipitationProbability ? hourly.precipitationProbability[i] : null;
 
     const row = document.createElement('div');
     row.className = `flex items-center justify-between px-3 py-2 rounded-xl ${isCurrentHour ? 'bg-sky-500/10 border border-sky-500/30' : 'bg-neutral-800/50'}`;
@@ -593,7 +602,7 @@ function openHourlyModal(dayIndex) {
       <span class="text-sm text-neutral-300 w-16">${isCurrentHour ? 'Now' : hourDate.toLocaleTimeString([], { hour: 'numeric' })}</span>
       <span class="text-xl">${info.emoji}</span>
       <span class="text-sm text-neutral-400 w-14 text-right">${precip !== null ? precip + '% 💧' : ''}</span>
-      <span class="text-sm font-semibold text-white w-12 text-right">${Math.round(hourly.temperature_2m[i])}°</span>
+      <span class="text-sm font-semibold text-white w-12 text-right">${Math.round(hourly.temperatureC[i])}°</span>
     `;
     hourlyModalList.appendChild(row);
   });
@@ -724,8 +733,9 @@ scannerCloseBtn.addEventListener('click', closeScanner);
 scannerRetryBtn.addEventListener('click', () => showScannerSection(scannerErrorRetryTarget || scannerModeSelect));
 
 // ---------------------------------------------------------------------
-// BARCODE MODE: live camera scan via html5-qrcode, then look the
-// decoded barcode up on Open Food Facts (free, keyless, CORS-friendly).
+// BARCODE MODE: live camera scan via html5-qrcode, then send the
+// decoded barcode to our backend, which looks it up on Open Food Facts
+// (free, keyless) and runs initial screening server-side.
 // ---------------------------------------------------------------------
 async function startBarcodeScan() {
   showScannerSection(barcodeView);
@@ -745,47 +755,45 @@ async function startBarcodeScan() {
   }
 }
 
-// Performance: in-memory only (cleared on reload — no localStorage/
-// sessionStorage, per the app's no-persistence constraint). Rescanning
-// the same barcode or re-translating identical text within one session
-// (e.g. double-checking a product) skips the network round-trip.
-const barcodeCache = new Map();
-
+// Product lookup + initial screening both happen server-side in one call
+// (backend provider: Open Food Facts — see backend/src/providers/product
+// and backend/src/services/HalalIngredientAnalyzer, with server-side
+// caching so rescanning the same barcode skips the network round-trip).
 async function lookupBarcode(barcode) {
   setScannerLoading(`Looking up barcode ${barcode}…`);
   try {
     const fetchStart = performance.now();
-    const cacheHit = barcodeCache.has(barcode);
-    let data = barcodeCache.get(barcode);
-    if (!data) {
-      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
-      data = await res.json();
-      barcodeCache.set(barcode, data);
-    }
-    console.log(`[Halal Scanner] Barcode lookup (${cacheHit ? 'cache' : 'network'}) took ${Math.round(performance.now() - fetchStart)}ms`);
+    const res = await fetch('/api/halal/barcode/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ barcode }),
+    });
+    const data = await res.json();
+    console.log(`[Halal Scanner] Barcode lookup took ${Math.round(performance.now() - fetchStart)}ms`);
+    if (!res.ok) throw new Error(data.error || 'Lookup failed');
 
-    if (data.status !== 1 || !data.product) {
+    const { product } = data;
+    if (!product.found) {
       setScannerError(`Barcode ${barcode} wasn't found in Open Food Facts. Try photographing the ingredients text instead.`);
       return;
     }
 
-    const product = data.product;
-    // Prefer Open Food Facts' own English field when it has one — only
-    // fall back to translating the raw (possibly non-English) field.
-    const englishFromApi = product.ingredients_text_en || '';
-    const ingredientsText = product.ingredients_text || englishFromApi;
-    const productName = product.product_name || 'Unknown product';
-    const allergens = (product.allergens_tags && product.allergens_tags.length)
-      ? product.allergens_tags.map((a) => a.replace(/^en:/, '')).join(', ')
-      : (product.allergens || '');
+    const ingredientsText = product.ingredientsText || product.ingredientsTextEn || '';
+    const allergens = (product.allergens || []).join(', ');
 
     if (!ingredientsText.trim()) {
-      setScannerError(`Found "${productName}" but it has no ingredients text listed in Open Food Facts. Try photographing the ingredients text instead.`);
+      setScannerError(`Found "${product.name}" but it has no ingredients text listed in Open Food Facts. Try photographing the ingredients text instead.`);
       return;
     }
 
-    let englishText = englishFromApi;
+    // The backend already screened whatever text it had. If Open Food
+    // Facts only gave a non-English field, that screening was run against
+    // non-English text (our keyword lists are English) — so translate
+    // client-side and re-screen against the translated text instead.
+    let englishText = product.ingredientsTextEn || '';
     let translationFailed = false;
+    let screening = data.screening;
+
     if (!englishText) {
       setScannerLoading('Translating ingredients to English…');
       const translateStart = performance.now();
@@ -797,6 +805,7 @@ async function lookupBarcode(barcode) {
       console.log(`[Halal Scanner] Translation took ${Math.round(performance.now() - translateStart)}ms`);
       translationFailed = englishText === null;
       englishText = englishText || ingredientsText;
+      screening = await analyzeIngredients(englishText);
     }
 
     // Debug aid for 1.2-style discrepancies: log the exact text this path
@@ -805,10 +814,11 @@ async function lookupBarcode(barcode) {
     console.log('[Halal Scanner] Barcode path screening text', { barcode, ingredientsText, englishText });
 
     renderScreeningResults({
+      screening,
       originalText: ingredientsText,
       englishText,
       translationFailed,
-      productName,
+      productName: product.name,
       allergens,
       source: 'Open Food Facts database — may not exactly match your physical package (regional or batch differences happen). If in doubt, photograph the ingredients label directly instead.',
     });
@@ -967,7 +977,10 @@ ocrFileInput.addEventListener('change', async () => {
     // screened, so it can be diffed against a barcode scan of the same product.
     console.log('[Halal Scanner] OCR path screening text', { originalText, englishText });
 
+    const screening = await analyzeIngredients(englishText);
+
     renderScreeningResults({
+      screening,
       originalText,
       englishText,
       translationFailed,
@@ -1064,82 +1077,19 @@ async function translateToEnglish(text, context = {}) {
 // certification: it flags possibilities for the user to verify, and the
 // wording throughout must never claim certainty (see renderScreeningResults).
 // ---------------------------------------------------------------------
-const NON_HALAL_KEYWORDS = [
-  'pork', 'lard', 'bacon', 'ham', 'pancetta', 'prosciutto', 'pepperoni',
-  'pork gelatin', 'gelatin (pork)', 'non-halal gelatin',
-  'ethanol', 'alcohol', 'wine', 'beer', 'rum', 'sherry', 'brandy',
-];
-
-// Meat-type detection: a required classification step (not optional) per
-// the spec — meat presence must NEVER silently pass through as "clean"
-// just because none of the keywords above matched. Halal status for any
-// of these depends on the slaughter method (zabiha), which ingredient
-// text alone can never confirm, so every match here always surfaces as
-// "needs verification" rather than being silently ignored. Pork/ham/bacon
-// etc. are intentionally NOT listed here — those are already covered,
-// more severely, by NON_HALAL_KEYWORDS above.
-const MEAT_VERIFICATION_REASON = 'meat ingredient — halal slaughter (zabiha) method cannot be confirmed from ingredient text alone; look for a halal certification mark';
-const MEAT_KEYWORDS = [
-  'beef', 'chicken', 'poultry', 'turkey', 'duck', 'lamb', 'mutton', 'veal', 'goat', 'venison', 'meat',
-].map((key) => ({ key, reason: MEAT_VERIFICATION_REASON }));
-
-const AMBIGUOUS_KEYWORDS = [
-  { key: 'gelatin',              reason: 'animal source not specified — could be pork, beef, or fish' },
-  { key: 'mono- and diglycerides', reason: 'can be derived from either plant or animal fat' },
-  { key: 'monoglycerides',        reason: 'can be derived from either plant or animal fat' },
-  { key: 'diglycerides',          reason: 'can be derived from either plant or animal fat' },
-  { key: 'whey',                  reason: 'production may involve animal-derived rennet' },
-  { key: 'rennet',                reason: 'often derived from animal enzymes' },
-  { key: 'enzymes',               reason: 'processing aid source is often undisclosed' },
-  { key: 'l-cysteine',            reason: 'can be derived from animal hair/feathers, or made synthetically' },
-  { key: 'natural flavor',        reason: 'the ingredients behind "natural flavor" are rarely disclosed' },
-  { key: 'natural flavour',       reason: 'the ingredients behind "natural flavour" are rarely disclosed' },
-  { key: 'carmine',               reason: 'insect-derived colorant; permissibility is debated among scholars' },
-  { key: 'cochineal',             reason: 'insect-derived colorant; permissibility is debated among scholars' },
-  { key: 'vanilla extract',       reason: 'often uses alcohol as a solvent/carrier' },
-];
-
-// Word-boundary matching instead of plain substring matching, so a short
-// keyword like "ham" doesn't false-positive inside an unrelated word like
-// "chamomile" (which contains "ham" as a substring).
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-function containsKeyword(lowerText, keyword) {
-  return new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i').test(lowerText);
-}
-
-// Drop matches that are pure substrings of a longer match already found
-// (e.g. "diglycerides" is contained in "mono- and diglycerides", "pork" is
-// contained in "pork gelatin") — only show the more specific/complete
-// phrase once, so the list doesn't look redundant.
-function dedupSubstringMatches(matches, keyOf) {
-  return matches.filter((match, i) =>
-    !matches.some((other, j) => i !== j && keyOf(other).length > keyOf(match).length && keyOf(other).includes(keyOf(match)))
-  );
-}
-
-function screenIngredients(text) {
-  const lower = text.toLowerCase();
-  const rawNonHalalMatches = NON_HALAL_KEYWORDS.filter((kw) => containsKeyword(lower, kw));
-  const nonHalalMatches = dedupSubstringMatches(rawNonHalalMatches, (kw) => kw);
-
-  // Don't double-flag generic "gelatin" as ambiguous if a more specific
-  // non-halal gelatin phrase already matched it above.
-  const hasSpecificNonHalalGelatin = nonHalalMatches.some((kw) => kw.includes('gelatin'));
-
-  const rawAmbiguousMatches = AMBIGUOUS_KEYWORDS.filter(({ key }) => {
-    if (key === 'gelatin' && hasSpecificNonHalalGelatin) return false;
-    return containsKeyword(lower, key);
+// Classification itself (keyword lists, word-boundary matching, mandatory
+// meat detection) now lives server-side in HalalIngredientAnalyzer — a
+// single shared rules engine for both the barcode and OCR paths (see
+// backend/src/services/HalalIngredientAnalyzer.js). We just POST the
+// English text here and render whatever comes back.
+async function analyzeIngredients(text) {
+  const res = await fetch('/api/halal/ingredients/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
   });
-  const ambiguousMatches = dedupSubstringMatches(rawAmbiguousMatches, ({ key }) => key);
-
-  // Required step: detect any meat type present. This runs unconditionally
-  // and is never skipped, so meat can never slip through as a silent pass.
-  const rawMeatMatches = MEAT_KEYWORDS.filter(({ key }) => containsKeyword(lower, key));
-  const meatMatches = dedupSubstringMatches(rawMeatMatches, ({ key }) => key);
-
-  return { nonHalalMatches, ambiguousMatches, meatMatches };
+  if (!res.ok) throw new Error('Ingredient analysis failed');
+  return res.json(); // { nonHalalMatches, ambiguousMatches, meatMatches, hasRisk }
 }
 
 // Renders the screening results using deliberately cautious, non-absolute
@@ -1150,9 +1100,8 @@ function screenIngredients(text) {
 // real non-halal risk worth a prominent, hard-to-miss visual — but the
 // wording itself stays hedged (no "Haram"/"Not Halal" verdict) per that
 // same principle. See CLAUDE.md "Why the cautious result labeling".
-function renderScreeningResults({ originalText, englishText, translationFailed, productName, allergens, source }) {
-  const { nonHalalMatches, ambiguousMatches, meatMatches } = screenIngredients(englishText);
-  const hasRisk = nonHalalMatches.length > 0 || ambiguousMatches.length > 0 || meatMatches.length > 0;
+function renderScreeningResults({ screening, originalText, englishText, translationFailed, productName, allergens, source }) {
+  const { nonHalalMatches, ambiguousMatches, meatMatches, hasRisk } = screening;
   const sections = [];
 
   if (productName) {
@@ -1256,161 +1205,180 @@ function renderScreeningResults({ originalText, englishText, translationFailed, 
 }
 
 // ---------------------------------------------------------------------
-// STEP 4: Find nearby landmarks / historical points of interest using
-// Wikipedia's free "geosearch" list API, within a 10km (10000m) radius.
-// (Feature #6)
+// NEARBY PLACES — Parks, Outdoor Activities, Restaurants Near Me.
+// Backed by the backend's /api/places (Parks/Outdoor) and /api/restaurants
+// (Restaurants, which also carries an evidence-based halal classification
+// per place). See backend/src/providers/places/OverpassProvider.js and
+// backend/src/services/RestaurantHalalVerifier.js. (Feature #6/#8)
 // ---------------------------------------------------------------------
-async function fetchNearbyLandmarks(lat, lon) {
-  const url = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch` +
-              `&gscoord=${lat}|${lon}&gsradius=10000&gslimit=15&format=json&origin=*`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Wikipedia fetch failed');
+
+const HALAL_CLASSIFICATION_META = {
+  halal_confirmed: { label: 'Halal Confirmed', emoji: '✅', classes: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300' },
+  likely_halal: { label: 'Likely Halal', emoji: '🟢', classes: 'bg-teal-500/15 border-teal-500/40 text-teal-300' },
+  mixed_needs_verification: { label: 'Mixed — Needs Verification', emoji: '🔶', classes: 'bg-orange-500/15 border-orange-500/40 text-orange-300' },
+  non_halal: { label: 'Non-Halal', emoji: '⛔', classes: 'bg-red-600/15 border-red-600/40 text-red-300' },
+  unknown: { label: 'Unknown', emoji: '❔', classes: 'bg-neutral-700/30 border-neutral-600 text-neutral-300' },
+};
+
+const SOURCE_TYPE_LABELS = {
+  osm_tag: 'OpenStreetMap tag',
+  official_website: 'Official website',
+  official_menu: 'Official menu',
+  product_metadata: 'Product/provider metadata',
+  not_available: 'Not available',
+};
+
+let currentPlacesCategory = 'parks';
+let lastPlacesCoords = null; // { lat, lon } — set once per location by loadEverythingForCoords
+
+async function fetchPlaces(lat, lon, category) {
+  if (category === 'restaurants') {
+    const res = await fetch(`/api/restaurants?lat=${lat}&lon=${lon}&radius=3000`);
+    if (!res.ok) throw new Error('Failed to fetch restaurants');
+    const data = await res.json();
+    return data.restaurants;
+  }
+  const res = await fetch(`/api/places?lat=${lat}&lon=${lon}&category=${category}&radius=3000`);
+  if (!res.ok) throw new Error('Failed to fetch places');
   const data = await res.json();
-  const places = data.query ? data.query.geosearch : [];
-  if (!places.length) return places;
-
-  // Enrich each place with Wikipedia's short description (e.g. "public park",
-  // "art museum", "17th-century church") so it can be sorted into a category
-  // below. One batched request for all pageids — same cost as before, just
-  // one extra keyless/CORS-friendly Wikipedia call.
-  try {
-    const descUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=description` +
-                     `&pageids=${places.map((p) => p.pageid).join('|')}&format=json&origin=*`;
-    const descRes = await fetch(descUrl);
-    if (descRes.ok) {
-      const descData = await descRes.json();
-      const pages = (descData.query && descData.query.pages) || {};
-      places.forEach((p) => {
-        const page = pages[p.pageid];
-        p.description = page ? (page.description || '') : '';
-      });
-    }
-  } catch {
-    // Non-fatal — places missing a description just fall into "Other Attractions"
-  }
-
-  return places;
+  return data.places;
 }
 
-// ---------------------------------------------------------------------
-// Landmark categorization: classify each place into a bucket by matching
-// keywords against its Wikipedia short description (falling back to the
-// title when there's no description). Lets someone in a hurry scan
-// category counts instead of scrolling a long flat list.
-// ---------------------------------------------------------------------
-const LANDMARK_CATEGORIES = [
-  { key: 'parks',     label: 'Parks & Attractions',  emoji: '🎡', keywords: ['park', 'garden', 'nature reserve', 'forest', 'lake', 'mountain', 'trail', 'botanical', 'beach', 'wood', 'theme park', 'amusement', 'zoo', 'aquarium', 'arcade', 'entertainment', 'fairground', 'water park', 'resort'] },
-  { key: 'museums',   label: 'Museums & Culture',    emoji: '🖼️', keywords: ['museum', 'gallery', 'theatre', 'theater', 'exhibit', 'cultural', 'art'] },
-  { key: 'religious', label: 'Religious Sites',      emoji: '⛪', keywords: ['church', 'cathedral', 'temple', 'mosque', 'synagogue', 'shrine', 'basilica', 'chapel', 'abbey'] },
-  { key: 'landmarks', label: 'Historic Landmarks',   emoji: '🏛️', keywords: ['historic', 'monument', 'memorial', 'castle', 'fort', 'ruins', 'archaeological', 'heritage', 'palace', 'tomb'] },
-  { key: 'transit',   label: 'Buildings & Transit',  emoji: '🏢', keywords: ['station', 'bridge', 'tower', 'building', 'skyscraper', 'airport', 'stadium'] },
-  { key: 'other',     label: 'Other Places',         emoji: '📍', keywords: [] }, // catch-all, must stay last
-];
-
-function classifyLandmark(place) {
-  const text = (place.description || place.title || '').toLowerCase();
-  for (const cat of LANDMARK_CATEGORIES) {
-    if (cat.keywords.some((kw) => text.includes(kw))) return cat;
-  }
-  return LANDMARK_CATEGORIES[LANDMARK_CATEGORIES.length - 1];
-}
-
-function buildLandmarkCard(place) {
-  const distanceKm = (place.dist / 1000).toFixed(1);
-  const wikiUrl = `https://en.wikipedia.org/?curid=${place.pageid}`;
-  // Google Maps link built straight from the place's own coordinates,
-  // so it drops a pin exactly on the landmark. This uses Google's public
-  // "search by coordinates" URL format — no API key or Places lookup needed.
+function buildPlaceCard(place) {
+  const distanceKm = (place.distanceMeters / 1000).toFixed(1);
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}`;
 
   const card = document.createElement('div');
-  card.className = 'bg-neutral-950/60 border border-neutral-800 rounded-xl px-4 py-3';
+  card.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3';
   card.innerHTML = `
-    <p class="text-white font-medium truncate">${place.title}</p>
-    <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${currentReferenceLabel}</p>
+    <p class="text-white font-medium truncate">${escapeHtml(place.name)}</p>
+    <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${escapeHtml(currentReferenceLabel)}${place.address ? ' · ' + escapeHtml(place.address) : ''}</p>
     <div class="flex gap-2 mt-3">
-      <a href="${wikiUrl}" target="_blank" rel="noopener noreferrer"
-         class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">
-        📖 Wikipedia
-      </a>
-      <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer"
-         class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">
-        📍 Google Maps
-      </a>
+      ${place.website ? `<a href="${escapeHtml(place.website)}" target="_blank" rel="noopener noreferrer" class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">🔗 Website</a>` : ''}
+      <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">📍 Google Maps</a>
     </div>
   `;
   return card;
 }
 
-// A collapsible section for one category (e.g. "Parks & Nature (3)").
-// Collapsed by default — someone in a hurry sees category counts at a
-// glance instead of scrolling past everything to find what they need.
-function buildCategorySection(cat, items) {
-  const section = document.createElement('div');
-  section.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden';
+// Restaurant cards carry the fuller "Restaurant result UI" spec: name,
+// distance, address, hours if available, halal classification +
+// confidence + evidence + source + source link, pork warning badge, and
+// a "verify before visiting" note unless fully confirmed. A "Deeper
+// Check" button re-runs verification in "deep" mode, which (if
+// ENABLE_WEB_MENU_CHECK is on server-side) additionally fetches the
+// restaurant's own official site/menu for supplementary evidence —
+// deliberately NOT done automatically for every restaurant in the list.
+function buildRestaurantCard(place) {
+  const meta = HALAL_CLASSIFICATION_META[place.halal.classification] || HALAL_CLASSIFICATION_META.unknown;
+  const distanceKm = (place.distanceMeters / 1000).toFixed(1);
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}`;
+  const sourceLabel = SOURCE_TYPE_LABELS[place.halal.sourceType] || 'Not available';
+  const sourceLink = place.halal.sourceLinks && place.halal.sourceLinks[0];
 
-  const header = document.createElement('button');
-  header.type = 'button';
-  header.className = 'w-full flex items-center justify-between px-4 py-3 active:bg-neutral-800/70 transition';
-  header.innerHTML = `
-    <span class="flex items-center gap-2 text-sm font-medium text-white">
-      <span>${cat.emoji}</span> ${cat.label}
-      <span class="text-neutral-500 font-normal">(${items.length})</span>
-    </span>
-    <svg class="chevron w-4 h-4 text-neutral-400 transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M6 9l6 6 6-6"/>
-    </svg>
+  const card = document.createElement('div');
+  card.className = 'bg-neutral-900 border border-neutral-800 rounded-2xl px-4 py-3';
+  card.innerHTML = `
+    <div class="flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <p class="text-white font-medium truncate">${escapeHtml(place.name)}</p>
+        <p class="text-xs text-neutral-500 mt-0.5">${distanceKm} km from ${escapeHtml(currentReferenceLabel)}${place.address ? ' · ' + escapeHtml(place.address) : ''}</p>
+        ${place.openingHours ? `<p class="text-xs text-neutral-500 mt-0.5">🕒 ${escapeHtml(place.openingHours)}</p>` : ''}
+      </div>
+      ${place.halal.porkDetected ? '<span class="shrink-0 text-[10px] font-semibold bg-red-600 text-white px-2 py-1 rounded-full">⚠️ PORK</span>' : ''}
+    </div>
+
+    <div class="mt-3 border rounded-xl px-3 py-2 ${meta.classes}">
+      <p class="text-sm font-semibold">${meta.emoji} ${meta.label} <span class="font-normal opacity-70">· Confidence: ${escapeHtml(place.halal.confidence)}</span></p>
+      <ul class="text-xs mt-1 space-y-0.5 list-disc list-inside opacity-90">
+        ${place.halal.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}
+      </ul>
+      ${place.halal.evidence.length ? `<p class="text-xs mt-1.5 opacity-70">Evidence: ${place.halal.evidence.map((e) => escapeHtml(e)).join('; ')}</p>` : ''}
+      <p class="text-xs mt-1.5 opacity-70">Source: ${escapeHtml(sourceLabel)}${sourceLink ? ` — <a href="${escapeHtml(sourceLink)}" target="_blank" rel="noopener noreferrer" class="underline">view source</a>` : ''}</p>
+      ${place.halal.classification !== 'halal_confirmed' ? '<p class="text-xs mt-1.5 font-medium">⚠️ Please verify before visiting.</p>' : ''}
+    </div>
+
+    <div class="flex gap-2 mt-3">
+      <button type="button" class="verify-deep-btn flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-sky-400 rounded-lg py-2 transition">🔍 Deeper Check</button>
+      <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" class="flex-1 text-center text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg py-2 transition">📍 Google Maps</a>
+    </div>
   `;
 
-  const body = document.createElement('div');
-  body.className = 'hidden px-4 pb-4 space-y-3';
-  items.forEach((place) => body.appendChild(buildLandmarkCard(place)));
-
-  header.addEventListener('click', () => {
-    const opening = body.classList.contains('hidden');
-    body.classList.toggle('hidden');
-    header.querySelector('.chevron').style.transform = opening ? 'rotate(180deg)' : '';
+  const verifyBtn = card.querySelector('.verify-deep-btn');
+  verifyBtn.addEventListener('click', async () => {
+    verifyBtn.textContent = 'Checking…';
+    verifyBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/restaurants/${encodeURIComponent(place.id)}/verify-halal`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Verification failed');
+      card.replaceWith(buildRestaurantCard({ ...place, halal: data.halal }));
+    } catch {
+      verifyBtn.textContent = 'Check failed — try again';
+      verifyBtn.disabled = false;
+    }
   });
 
-  section.appendChild(header);
-  section.appendChild(body);
-  return section;
+  return card;
 }
 
-function renderLandmarks(places) {
-  landmarksList.innerHTML = '';
-
-  // Tell the user exactly what point the "X km" figures below are measured from
-  landmarksSubtitle.textContent = `Distances shown are measured from ${currentReferenceLabel}`;
-  landmarksSubtitle.classList.remove('hidden');
+function renderPlaces(places, category) {
+  placesList.innerHTML = '';
+  restaurantDisclaimer.classList.toggle('hidden', category !== 'restaurants');
+  placesSubtitle.textContent = `Distances shown are measured from ${currentReferenceLabel}`;
+  placesSubtitle.classList.remove('hidden');
 
   if (!places.length) {
-    landmarksLoading.classList.add('hidden');
-    landmarksEmpty.classList.remove('hidden');
+    placesLoading.classList.add('hidden');
+    placesEmpty.classList.remove('hidden');
     return;
   }
 
-  // Group into categories, preserving each place's distance-sorted order
-  const groups = new Map(); // category key -> array of places
   places.forEach((place) => {
-    const cat = classifyLandmark(place);
-    if (!groups.has(cat.key)) groups.set(cat.key, []);
-    groups.get(cat.key).push(place);
+    const card = category === 'restaurants' ? buildRestaurantCard(place) : buildPlaceCard(place);
+    placesList.appendChild(card);
   });
 
-  // Render in the fixed taxonomy order above, skipping empty categories
-  LANDMARK_CATEGORIES.forEach((cat) => {
-    const items = groups.get(cat.key);
-    if (items && items.length) landmarksList.appendChild(buildCategorySection(cat, items));
-  });
-
-  landmarksLoading.classList.add('hidden');
-  landmarksList.classList.remove('hidden');
+  placesLoading.classList.add('hidden');
+  placesEmpty.classList.add('hidden');
+  placesList.classList.remove('hidden');
 }
+
+async function loadPlacesForCategory(category) {
+  currentPlacesCategory = category;
+  placesLoading.classList.remove('hidden');
+  placesList.classList.add('hidden');
+  placesEmpty.classList.add('hidden');
+  placesSubtitle.classList.add('hidden');
+  restaurantDisclaimer.classList.add('hidden');
+
+  if (!lastPlacesCoords) return;
+  try {
+    const places = await fetchPlaces(lastPlacesCoords.lat, lastPlacesCoords.lon, category);
+    renderPlaces(places, category);
+  } catch {
+    placesLoading.classList.add('hidden');
+    placesEmpty.textContent = 'Could not load nearby places right now.';
+    placesEmpty.classList.remove('hidden');
+  }
+}
+
+placeTabs.forEach((tab) => {
+  tab.addEventListener('click', () => {
+    if (tab.dataset.category === currentPlacesCategory) return;
+    placeTabs.forEach((t) => {
+      t.classList.remove('bg-sky-500', 'text-neutral-950');
+      t.classList.add('bg-neutral-800', 'text-neutral-300');
+    });
+    tab.classList.remove('bg-neutral-800', 'text-neutral-300');
+    tab.classList.add('bg-sky-500', 'text-neutral-950');
+    loadPlacesForCategory(tab.dataset.category);
+  });
+});
 
 // ---------------------------------------------------------------------
 // Orchestrator: given ANY lat/lon (whether from GPS or from a search),
-// kick off all three data fetches (place name, weather, landmarks).
+// kick off all three data fetches (place name, weather, nearby places).
 // Each section resets to its own loading state first, and fetches run
 // independently so one failing doesn't block the others.
 // ---------------------------------------------------------------------
@@ -1422,10 +1390,11 @@ async function loadEverythingForCoords(lat, lon, knownLabel) {
   currentWeatherContent.classList.add('hidden');
   forecastLoading.classList.remove('hidden');
   forecastStrip.classList.add('hidden');
-  landmarksLoading.classList.remove('hidden');
-  landmarksList.classList.add('hidden');
-  landmarksEmpty.classList.add('hidden');
-  landmarksSubtitle.classList.add('hidden');
+  placesLoading.classList.remove('hidden');
+  placesList.classList.add('hidden');
+  placesEmpty.classList.add('hidden');
+  placesSubtitle.classList.add('hidden');
+  restaurantDisclaimer.classList.add('hidden');
 
   // 1) Place name (skip the network call if we already have a label from search)
   if (knownLabel) {
@@ -1454,14 +1423,9 @@ async function loadEverythingForCoords(lat, lon, knownLabel) {
       forecastLoading.classList.add('hidden');
     });
 
-  // 3) Nearby landmarks
-  fetchNearbyLandmarks(lat, lon)
-    .then(renderLandmarks)
-    .catch(() => {
-      landmarksLoading.classList.add('hidden');
-      landmarksEmpty.textContent = 'Could not load nearby places right now.';
-      landmarksEmpty.classList.remove('hidden');
-    });
+  // 3) Nearby places (Parks / Outdoor Activities / Restaurants Near Me)
+  lastPlacesCoords = { lat, lon };
+  loadPlacesForCategory(currentPlacesCategory);
 }
 
 // ---------------------------------------------------------------------
@@ -1486,23 +1450,14 @@ function debounce(fn, delayMs) {
   };
 }
 
-// Ask Nominatim for several possible city matches for the given text.
+// Ask our backend (Nominatim underneath) for several possible city
+// matches for the given text. limit=6 keeps the dropdown short and the
+// request light on the shared Nominatim instance.
 async function fetchSuggestions(query) {
-  // namedetails/addressdetails give us cleaner display labels;
-  // limit=6 keeps the dropdown short and the request light.
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}` +
-              `&addressdetails=1&limit=6`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}&limit=6`);
   if (!res.ok) throw new Error('Suggestion fetch failed');
-  return res.json();
-}
-
-// Build a short, readable label like "Paris, France" from a Nominatim result
-function shortLabel(result) {
-  const a = result.address || {};
-  const main = a.city || a.town || a.village || a.county || result.display_name.split(',')[0];
-  const region = a.state || a.country || '';
-  return region && region !== main ? `${main}, ${region}` : main;
+  const data = await res.json();
+  return data.results || []; // already normalized: { lat, lon, label, address }
 }
 
 function renderSuggestions(results) {
@@ -1519,7 +1474,7 @@ function renderSuggestions(results) {
     const li = document.createElement('li');
     li.className = 'px-4 py-2.5 text-sm text-neutral-200 hover:bg-neutral-700 cursor-pointer flex items-center gap-2';
     li.dataset.index = i;
-    li.innerHTML = `<span>📍</span><span>${shortLabel(result)}</span>`;
+    li.innerHTML = `<span>📍</span><span>${escapeHtml(result.label)}</span>`;
     li.addEventListener('mousedown', (e) => {
       // mousedown (not click) fires before the input's blur event,
       // so the dropdown doesn't disappear before we can read the click
@@ -1545,13 +1500,12 @@ function closeSuggestions() {
   activeIndex = -1;
 }
 
-// When a suggestion is chosen (click or Enter), load its weather/landmarks
+// When a suggestion is chosen (click or Enter), load its weather/places
 function selectSuggestion(result) {
-  const label = shortLabel(result);
-  searchInput.value = label;
+  searchInput.value = result.label;
   closeSuggestions();
   hideStatus();
-  loadEverythingForCoords(parseFloat(result.lat), parseFloat(result.lon), label);
+  loadEverythingForCoords(result.lat, result.lon, result.label);
 }
 
 // Fire a suggestion lookup whenever the user pauses typing (debounced)

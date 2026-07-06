@@ -1,0 +1,25 @@
+{
+  "name": "near-halal-backend",
+  "version": "1.0.0",
+  "description": "Free-first, provider-based backend for the Near Halal app (weather, geocoding, places, halal ingredient/restaurant verification).",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "lint": "eslint .",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.9.0"
+  }
+}

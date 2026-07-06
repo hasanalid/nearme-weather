@@ -1,0 +1,27 @@
+import 'dotenv/config';
+
+// Central place that reads environment variables — everything else in the
+// app imports `config` instead of touching `process.env` directly, so the
+// available knobs are easy to find in one file and easy to document in
+// .env.example / README.
+export const config = {
+  port: Number(process.env.PORT) || 3000,
+
+  providers: {
+    weather: process.env.WEATHER_PROVIDER || 'openmeteo',
+    geocoding: process.env.GEOCODING_PROVIDER || 'nominatim',
+    places: process.env.PLACES_PROVIDER || 'overpass',
+    product: process.env.PRODUCT_PROVIDER || 'openfoodfacts',
+  },
+
+  nominatimUserAgent: process.env.NOMINATIM_USER_AGENT || 'NearHalal/1.0 (no contact configured - set NOMINATIM_USER_AGENT)',
+
+  enableWebMenuCheck: process.env.ENABLE_WEB_MENU_CHECK === 'true',
+
+  cacheTtlSeconds: Number(process.env.CACHE_TTL_SECONDS) || 3600,
+
+  maxSearchRadiusMeters: Number(process.env.MAX_SEARCH_RADIUS_METERS) || 5000,
+  defaultSearchRadiusMeters: Number(process.env.DEFAULT_SEARCH_RADIUS_METERS) || 3000,
+
+  apiRateLimitPerMinute: Number(process.env.API_RATE_LIMIT_PER_MINUTE) || 60,
+};

@@ -1,0 +1,34 @@
+# Example deployment config for Render (render.com), a Docker-friendly
+# host with a free tier. Other hosts work too (Fly.io, Railway, a plain
+# VPS) — this file just documents one concrete, known-working option.
+# Build context is the repo root (see Dockerfile).
+services:
+  - type: web
+    name: near-halal
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: WEATHER_PROVIDER
+        value: openmeteo
+      - key: GEOCODING_PROVIDER
+        value: nominatim
+      - key: PLACES_PROVIDER
+        value: overpass
+      - key: PRODUCT_PROVIDER
+        value: openfoodfacts
+      - key: NOMINATIM_USER_AGENT
+        value: "NearHalal/1.0 (contact: set-your-real-contact@example.com)"
+      - key: ENABLE_WEB_MENU_CHECK
+        value: "false"
+      - key: CACHE_TTL_SECONDS
+        value: "3600"
+      - key: MAX_SEARCH_RADIUS_METERS
+        value: "5000"
+      - key: DEFAULT_SEARCH_RADIUS_METERS
+        value: "3000"
+      - key: API_RATE_LIMIT_PER_MINUTE
+        value: "60"

@@ -1,335 +1,300 @@
 # Near Halal — Project Context
 
 ## What this is
-A single-file, client-only mobile web app (PWA) — app name **Near Halal**
-(renamed from "NearMe Weather" once the Halal Scanner became a core
-feature, not just a weather app) — that shows the user's local weather, a
-7-day forecast, nearby Wikipedia landmarks, and a camera-based
-multilingual Halal Scanner with halal keyword screening — with zero
-backend, zero accounts, and zero API keys.
+A location-discovery app (local weather, 7-day forecast, nearby parks /
+outdoor activities / restaurants) combined with a camera-based
+multilingual Halal Scanner — built on a **provider-based Node.js backend**
+plus a static frontend, using only free/open/keyless data sources by
+default (no paid API is wired in anywhere, not even as a disabled
+option).
 
-The name was chosen by the user from four proposed options (HalalNear,
-Halal Compass, NearHalal, HalalScope) once the app grew from "weather +
-landmarks" into also including halal ingredient scanning; a space was
-added afterward ("Near Halal") for readability — everywhere user-facing
+The name **Near Halal** was chosen by the user from four proposed options
+(HalalNear, Halal Compass, NearHalal, HalalScope) once the app grew from
+"weather + landmarks" into also including halal ingredient scanning; a
+space was added afterward for readability — everywhere user-facing
 (title, header, manifest), it's two words.
 
-**Note on the repo/URL**: the GitHub repo is intentionally still named
-`nearme-weather` (not renamed to match) so the live GitHub Pages URL
-(`https://hasanalid.github.io/nearme-weather/`) doesn't change and break
-existing links/installed PWA references. Only in-app branding (title,
-header, manifest, icons) was renamed — ask before renaming the repo
-itself, since that's a URL-breaking change.
+**Note on the repo name/URL**: the GitHub repo is intentionally still
+named `nearme-weather` (not renamed to match) to avoid an unrelated,
+disruptive rename. It no longer matters for hosting the same way it used
+to, though — see "Architecture history" below.
 
-## Files
-- `index.html` — the entire app: HTML, Tailwind CSS (via CDN script tag), and
-  vanilla JavaScript, all in one file. No build step.
-- `manifest.json` — PWA manifest (name, icons, theme color, standalone display).
-- `sw.js` — minimal service worker. Caches the app shell only (index.html,
-  manifest, icons) for offline installability. Does NOT cache live API
-  responses — weather/location data should always be fetched fresh.
-- `icon-192.png`, `icon-512.png` — app icons: a white location pin (same
-  silhouette as the in-app pin icon, for brand consistency) with a
-  crescent moon inside its head, on a sky-blue-to-emerald diagonal
-  gradient rounded-square background — pin = location/discovery, crescent
-  = halal, gradient ties together the weather (sky) and Halal Scanner
-  (emerald) sections of the app. Generated from an SVG source (not kept
-  in the repo) via `sharp` at 192x192 and 512x512; both are registered as
-  `"purpose": "any maskable"` in `manifest.json`, and the pin+crescent
-  artwork stays within the ~80% safe zone Android's adaptive-icon mask
-  requires.
+## Architecture history (important context, do not re-introduce by accident)
+This project went through a genuine architecture pivot, not just feature
+additions:
+- **Originally**: a single `index.html` file, zero backend, zero build
+  step, all free APIs (Nominatim, Open-Meteo, Wikipedia, Open Food Facts,
+  MyMemory) called directly from the browser, hosted as a static site on
+  GitHub Pages.
+- **Now**: a real Node.js + Express backend (`backend/`) sits between the
+  frontend and every external provider, and the frontend (`frontend/`)
+  is served as static files by that same backend process. GitHub Pages
+  **cannot** host this anymore — it only serves static files, and this
+  app now needs a process that can run a server.
+- This pivot happened because a product spec explicitly required a
+  provider-based backend architecture (REST endpoints, env-var provider
+  selection, server-side caching/rate-limiting, an evidence-based
+  restaurant halal verifier) that's fundamentally incompatible with a
+  static single-file app. The user was asked to confirm this tradeoff
+  explicitly before it happened, since it meant leaving behind the
+  "single file, no backend, GitHub Pages" setup that had been the
+  project's hard constraint from the very first turn.
+- **Do not silently revert to the old static-only architecture** (e.g. by
+  "simplifying" a feature back to a direct browser→external-API call) —
+  the whole point of this pivot was centralizing those calls server-side
+  for caching, rate-limiting, and a single shared rules engine. If a
+  future change seems to want that reversion, ask first — it's the same
+  category of decision as the original pivot.
+
+## Repo layout
+```
+frontend/        Static HTML/CSS/JS — no build step, no framework
+                  (Tailwind via CDN, vanilla JS). Served by the backend
+                  as static files (see backend/src/app.js).
+  index.html      The entire UI in one file, as before.
+  manifest.json   PWA manifest.
+  sw.js           Service worker — app-shell cache-first, but explicitly
+                  excludes /api/* (see comment in the file) now that API
+                  calls are same-origin with the frontend.
+  icon-192.png,
+  icon-512.png    App icons (see "App icon design" below).
+
+backend/          Node.js + Express API (ES modules, `"type": "module"`).
+  src/providers/  One interface + one default free-provider implementation
+                  each: WeatherProvider (Open-Meteo), GeocodingProvider
+                  (Nominatim), PlacesProvider (Overpass), ProductProvider
+                  (Open Food Facts). Swappable later via container.js
+                  without touching routes/frontend.
+  src/services/   HalalIngredientAnalyzer (keyword screening — the single
+                  shared rules engine for both barcode and OCR paths),
+                  RestaurantHalalVerifier (evidence-based classification),
+                  WebMenuChecker (optional, off-by-default official
+                  website/menu text fetch, robots.txt-respecting).
+  src/cache/      CacheService interface + InMemoryCacheService (default;
+                  swap in Redis later behind the same interface).
+  src/rateLimit/  RateLimitService — throttles OUR OWN outbound calls to
+                  Nominatim/Overpass. Separate from the inbound
+                  express-rate-limit middleware in app.js, which protects
+                  the API itself from being hammered by a client.
+  src/routes/     The 8 API endpoints (see README).
+  src/config.js   Single place that reads all env vars.
+  src/container.js Composition root — instantiates cache/rate-limiter/
+                  providers/services based on config, wires them into
+                  routes.
+  test/           node:test unit tests for HalalIngredientAnalyzer and
+                  RestaurantHalalVerifier (pure, no network — run with
+                  `npm test`).
+  Dockerfile      Lives at the REPO ROOT (not backend/), since its build
+                  context needs both backend/ and frontend/ as siblings.
+  render.yaml     Example deployment config (Render; any Docker host works).
+```
 
 ## Hard constraints — do not violate these without asking first
-- No npm, no bundler, no build step. Everything must keep running as plain
-  static files openable via a simple local server or GitHub Pages.
-- No API keys, no login, no accounts, no backend of any kind.
-- No `localStorage`/`sessionStorage` (kept out deliberately — no persistence
-  by design, since there's no account system).
-- Must remain mobile-first, dark-themed, single-column (`max-w-md mx-auto`).
+- **No paid API, anywhere, even as a disabled/optional path.** Every
+  provider interface (`WeatherProvider`, `GeocodingProvider`,
+  `PlacesProvider`, `ProductProvider`) currently has exactly one free/
+  keyless implementation registered. See README "Adding a future paid
+  provider" for how to add one *if the user explicitly asks* — don't add
+  one preemptively "for completeness."
+- **Free-first, provider-interface architecture.** Don't hardcode a
+  specific provider's API shape into a route or the frontend — go
+  through the provider/service abstraction so a provider can be swapped
+  via `container.js` + an env var alone.
+- **Respect the free upstream services.** Nominatim: 1 req/sec + a real
+  `User-Agent` (`NOMINATIM_USER_AGENT`), enforced via `RateLimitService`.
+  Overpass: also throttled and requires a `User-Agent` (its server 406s
+  requests without one — hit and fixed during development, since Node's
+  `fetch` sends none by default unlike `curl`). Cache aggressively
+  (`CacheService`) rather than re-querying.
+- **No `localStorage`/`sessionStorage` in the frontend** (kept out
+  deliberately — no persistence by design, no account system). Backend
+  in-memory caching is fine (it's server-side, not the browser).
+- **Frontend stays a static, build-step-free single page** (`frontend/`)
+  — the backend is where npm/Node tooling lives now, not the frontend.
+- Must remain mobile-first, dark-themed, single-column (`max-w-md
+  mx-auto`).
 
-## APIs used (all free, keyless, CORS-friendly) — do not swap these without discussion
-- **Nominatim** (OpenStreetMap) — `https://nominatim.openstreetmap.org/reverse`
-  and `/search` — for reverse geocoding (coords → place name) and forward
-  geocoding (typed city → coords) and autocomplete suggestions. Has a fair-use
-  rate limit (~1 req/sec) since there's no per-user API key.
-- **Open-Meteo** — `https://api.open-meteo.com/v1/forecast` — current weather
-  + 7-day daily forecast in one call. Weather codes follow the WMO standard
-  (mapped in `WEATHER_CODE_MAP` in the JS).
-- **Wikipedia GeoSearch** — `https://en.wikipedia.org/w/api.php?action=query&list=geosearch`
-  — nearby landmarks within a 10km radius (`gsradius=10000`).
-- **Google Maps** — link-only, not fetched. Built from lat/lon as
-  `https://www.google.com/maps/search/?api=1&query={lat},{lon}` — no API key
-  needed for a plain deep link.
-- **Open Food Facts** — `https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
-  — free, keyless, CORS-friendly product lookup by barcode for the
-  Halal Scanner. It's a community-editable database, so its fields
-  (`product_name`, `ingredients_text`, `allergens_tags`) are treated as
-  untrusted text and HTML-escaped before rendering (see `escapeHtml` in
-  the JS) rather than inserted into the DOM raw.
-- **MyMemory Translation** — `https://api.mymemory.translated.net/get?q={text}&langpair=autodetect|en`
-  — free, keyless, CORS-friendly translation, used to translate OCR'd or
-  non-English `ingredients_text` to English before keyword screening
-  (`translateToEnglish` in the JS). Anonymous requests are capped at a few
-  hundred characters each, so long ingredient lists are split into
-  comma-boundary chunks (`chunkTextForTranslation`) and rejoined, then
-  cached in-memory per exact chunk (`translationCache`) for the session.
-  If translation fails for any reason, screening falls back to the
-  original text and the UI shows an explicit caveat rather than silently
-  screening nothing — see "Why the cautious result labeling" below.
-  **Known bug fixed**: MyMemory can return HTTP 200 with a rate-limit
-  warning string (e.g. "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE
-  TRANSLATIONS FOR TODAY...") sitting in `responseData.translatedText`.
-  Treating that as a real translation was the actual cause of the
-  "translation display errors" bug report — the warning text got
-  screened and shown as if it were ingredient text. `translateToEnglish`
-  now checks `responseStatus === 200` AND rejects anything matching
-  `isTranslationWarning()` before accepting it as a translation; failures
-  are logged via `console.error('[Halal Scanner] Translation failed', ...)`
-  with context (barcode/OCR source, langpair, error type) for diagnosis.
+## Free API providers used (see README for the full table + rate-limit/attribution notes)
+- **Open-Meteo** (weather) — `backend/src/providers/weather/OpenMeteoProvider.js`.
+- **OpenStreetMap Nominatim** (geocoding) — `backend/src/providers/geocoding/NominatimProvider.js`.
+- **OpenStreetMap Overpass** (places: parks, outdoor activities, restaurants) — `backend/src/providers/places/OverpassProvider.js`.
+- **Open Food Facts** (barcode/product lookup) — `backend/src/providers/product/OpenFoodFactsProvider.js`.
+- **Tesseract.js** (OCR) — stays entirely client-side in `frontend/index.html`, never sends images to any server.
+- **MyMemory** (translation) — stays client-side too, translates OCR'd/non-English ingredient text to English before it's POSTed to the backend for screening.
 
-## Libraries used (all open-source, loaded via CDN script tag — no build step)
-- **html5-qrcode** — camera-based barcode/QR decoding for the ingredient
-  scanner's primary path.
-- **Tesseract.js** — client-side OCR (no API key, runs entirely in the
-  browser) for the ingredient scanner's fallback path, used when no
-  barcode is found.
+## Places categories (Parks / Outdoor Activities / Restaurants Near Me)
+Replaced the old Wikipedia-GeoSearch-based "Nearby Landmarks & History"
+feature entirely. OSM tag mapping lives in
+`backend/src/providers/places/osmCategoryMap.js`:
+- **Parks**: `leisure=park`, `leisure=garden`, `boundary=protected_area`,
+  `landuse=grass`, `natural=wood`.
+- **Outdoor Activities**: `leisure=playground`, `leisure=sports_centre`,
+  `leisure=pitch`, `leisure=track`, `tourism=attraction`,
+  `tourism=picnic_site`, `highway=path`, `route=hiking`,
+  `amenity=community_centre`.
+- **Restaurants**: `amenity=restaurant`, `amenity=fast_food`,
+  `amenity=cafe`, `amenity=food_court`.
+Each category is queried as node/way/relation via Overpass `around:`,
+capped at 30 results, cached per rounded-coordinate+radius key.
+`GET /api/places?category=...` serves Parks/Outdoor; `GET /api/restaurants`
+is a separate endpoint since it additionally attaches a `halal`
+classification to every result (see below).
+
+## Restaurant halal verification (`RestaurantHalalVerifier`)
+Evidence-based, never claims certainty — see README "Restaurant halal
+verification — known limitations" for the full picture. Key design
+points to preserve:
+- **Two modes**: list mode (`deep: false`, used by `GET /api/restaurants`)
+  classifies from OSM tags only — no outbound web requests, safe to run
+  for every result in a list. Deep mode (`deep: true`, used by
+  `GET /api/restaurants/:id/verify-halal`) additionally fetches the
+  restaurant's own official website/menu URL (**only** a URL that came
+  from OSM data — never a searched/scraped URL) if
+  `ENABLE_WEB_MENU_CHECK=true`, checking `robots.txt` first.
+- **Classification priority order** (`HALAL_CLASSIFICATION` in
+  `RestaurantHalalVerifier.js`): pork-related text overrides halal-leaning
+  evidence (unless a clearly-separated halal-only section could be
+  detected, which this analyzer has no reliable way to do — that carve-out
+  is intentionally never auto-applied) → `diet:halal=no` →
+  `diet:halal=only`/certified text → `diet:halal=yes`/halal-options
+  text/cuisine mention (split into `mixed_needs_verification` vs.
+  `likely_halal` depending on whether the cuisine tag looks like a mixed
+  menu) → `unknown` (no evidence at all — **never** inferred from
+  cuisine type alone).
+- **Frontend UI**: `HALAL_CLASSIFICATION_META` in `frontend/index.html`
+  maps each classification to an emoji + color; every card shows a
+  pork-detected warning badge when applicable, and a "⚠️ Please verify
+  before visiting" note unless the classification is exactly
+  `halal_confirmed`. The restaurants tab always shows the persistent
+  disclaimer ("Halal status is based on available public data and may be
+  incomplete...") regardless of classification.
+- Unit tests: `backend/test/restaurantHalalVerifier.test.js` — covers
+  each classification tier, list-vs-deep mode (confirms list mode never
+  fetches a website even when a URL is present), and
+  `ENABLE_WEB_MENU_CHECK=false` fully disabling the fetch.
+
+## App icon design
+`icon-192.png`/`icon-512.png`: a white location pin (same silhouette as
+the in-app pin icon, for brand consistency) with a crescent moon inside
+its head, on a sky-blue-to-emerald diagonal gradient rounded-square
+background — pin = location/discovery, crescent = halal, gradient ties
+together the weather (sky) and Halal Scanner (emerald) sections of the
+app. Generated from an SVG source (not kept in the repo) via `sharp` at
+192x192 and 512x512; both are registered as `"purpose": "any maskable"`
+in `manifest.json`, and the artwork stays within the ~80% safe zone
+Android's adaptive-icon mask requires.
 
 ## Header / title design
-The header shows the actual app icon (`icon-192.png`, rendered small,
-`rounded-xl`) next to the wordmark, styled as two colored words —
-`text-sky-400` "Near" + `text-emerald-400` "Halal" — echoing the icon's
-own sky-to-emerald gradient (weather = sky, halal = emerald) instead of
-a single flat white title. `locationName` underneath uses a neutral
-`text-neutral-400` rather than sky, specifically so it doesn't visually
-blend with the sky-colored "Near" directly above it.
+The header shows the app icon next to the wordmark, styled as two
+colored words — `text-sky-400` "Near" + `text-emerald-400` "Halal" —
+echoing the icon's own gradient. `locationName` underneath uses a neutral
+`text-neutral-400` so it doesn't visually blend with the sky-colored
+"Near" above it. The header has **no** scanner entry point (removed —
+see "Home page layout" below); `openScanner()` has exactly one caller,
+the hero card.
 
-## Home page layout (redesigned)
+## Home page layout
 Order top-to-bottom is deliberate — do not reorder without discussion:
-1. **Halal Scan hero** — the primary, top-most feature (`#heroScanBtn`),
-   a large tile with icon + label + description, calls `openScanner()`.
+1. **Halal Scan hero** (`#heroScanBtn`) — the primary, top-most feature.
 2. **Current weather card** — directly below the hero.
-3. Everything else (7-day forecast, nearby landmarks) follows after,
-   in their prior relative order.
-The header itself intentionally has NO scanner entry point (the
-camera icon + "Halal Scanner" label that used to sit there was removed —
-duplicated the hero's job while adding clutter at the very top of the
-page). `openScanner()` currently has exactly one caller, `heroScanBtn`.
-If a persistent scanner entry point is ever wanted again while scrolled
-past the hero, that's a deliberate product decision to make, not a
-default to restore silently.
+3. Everything else (7-day forecast, Nearby Places tabs) follows after.
 
-## Key features already implemented
-1. Mobile-first dark UI (Tailwind CDN)
-2. Geolocation on load (`navigator.geolocation`)
-3. Reverse geocoding to show a readable place name
-4. Current weather (temp, wind, condition text/emoji, sunrise/sunset)
-5. 7-day horizontally scrolling forecast strip
-6. Nearby landmarks grouped into collapsible categories (Parks &
-   Attractions, Museums & Culture, Religious Sites, Historic Landmarks,
-   Buildings & Transit, Other Places) — classified by keyword-matching
-   each place's Wikipedia short description (`prop=description`, one
-   batched call for all pageids). "Parks & Attractions" deliberately
-   covers both nature (park, garden, forest, lake...) AND
-   entertainment/recreation (theme park, amusement, zoo, aquarium,
-   arcade, fairground, water park...) as one combined category, per the
-   product spec's own framing ("parks, attractions, entertainment venues
-   ... alongside existing categories"). No new API was introduced for
-   this — it reuses the same Wikipedia GeoSearch feed as every other
-   category (see hard constraint: no new API keys), just with a broader
-   keyword list; a dedicated attractions API (Google Places, TripAdvisor,
-   etc.) would require registration/keys and was intentionally avoided.
-   Collapsed by default so someone in a hurry sees category counts
-   instead of scrolling a long flat list. Each card still has a Wikipedia
-   link AND a Google Maps link, with distance explicitly labeled ("X km
-   from your current location" or "X km from <searched city>")
-7. Manual city search bar with debounced (300ms) autocomplete dropdown,
-   keyboard navigation (arrows/enter/escape), tolerant of typos via
-   Nominatim's built-in fuzzy matching
-8. PWA install support via manifest + service worker
-9. Hourly forecast bottom-sheet modal — tapping the current weather card
-   or any day in the 7-day strip opens that day's hour-by-hour breakdown
-   (temp, condition, precipitation probability), with the current hour
-   highlighted as "Now" when viewing today. Reads from the same
-   Open-Meteo response already fetched (`hourly=...`), no extra request.
-   Note: Open-Meteo returns naive local-time strings for the queried
-   location (no UTC offset embedded), so the "Now" comparison shifts the
-   real UTC clock by the response's `utc_offset_seconds` and compares as
-   strings — don't compare those timestamps directly against `new Date()`.
-10. **Halal Scanner** (opened via the "Halal Scan" hero card at the top
-    of the page — see "Home page layout" above; no separate header entry
-    point) — two entry paths that both feed the same halal keyword
-    screening:
-    - **Barcode mode** (primary): live camera scan via html5-qrcode, then
-      looks the decoded barcode up on Open Food Facts for `product_name`,
-      `ingredients_text`, and `allergens_tags`. Prefers OFF's own
-      `ingredients_text_en` field when present; only calls the translation
-      API as a fallback when OFF doesn't already provide English text.
-    - **OCR fallback**: for loose/unpackaged food or a barcode not found
-      in Open Food Facts, the user instead photographs the ingredients
-      label directly (a plain `<input type="file" capture="environment">`
-      — simpler and more reliable across mobile browsers than hand-building
-      a live-preview capture pipeline). The photo is preprocessed
-      (`preprocessImageForOcr`: downscaled to a max 1600px dimension +
-      grayscale/contrast/brightness boost via canvas) before OCR — both a
-      speed win (fewer pixels) and an accuracy win (better recognition on
-      low-light/low-contrast real-world photos). OCR itself
-      (`runOcr`) tries a fast English-only Tesseract worker first
-      (`OCR_LANGUAGES_FAST = 'eng'`), and only escalates to the full
-      multilingual worker (`OCR_LANGUAGES_FULL = 'eng+ara+fra+spa+ind'` —
-      English, Arabic, French, Spanish, Indonesian/Malay; extend this
-      constant if more languages are needed) if the fast pass' confidence
-      is below `OCR_CONFIDENCE_THRESHOLD` or the text looks like gibberish
-      — keeping the common case (packaging with at least some English)
-      fast while still supporting any language.
-    - **Never show garbled/gibberish text**: `isTextLikelyGibberish()`
-      checks the fraction of Unicode letter/number characters
-      (`\p{L}`/`\p{N}`, any script) vs. total non-whitespace characters —
-      real text in any language is mostly letters; corrupted OCR output
-      skews toward stray symbols. Applied to (a) the raw OCR output
-      (combined with Tesseract's own confidence score) and (b) the
-      translated text (in case OCR was fine but translation produced
-      nonsense). Either check failing shows "This photo was hard to read
-      clearly..." and sends "Try again" straight back to the OCR capture
-      view (`setScannerError(message, ocrView)`) — never displays
-      corrupted text and calls it a result.
-    - Whatever text comes out of either path is translated to English via
-      MyMemory (`translateToEnglish`) before screening, since the keyword
-      lists are English-only. Both the original and translated text are
-      shown to the user (only as two separate blocks when they actually
-      differ, to avoid redundant UI when the source was already English).
-    - Screening matches the English text against three keyword lists —
-      `NON_HALAL_KEYWORDS`, `AMBIGUOUS_KEYWORDS` (each with a short
-      reason), and `MEAT_KEYWORDS` — and always shows the raw extracted
-      ingredient text alongside the flags, plus a persistent
-      non-certification disclaimer. See "Why the cautious result
-      labeling" below before changing any of this wording.
-    - **Mandatory meat-type detection**: `MEAT_KEYWORDS` (beef, chicken,
-      poultry, turkey, duck, lamb, mutton, veal, goat, venison, meat —
-      NOT pork/ham/bacon, which are already covered more severely by
-      `NON_HALAL_KEYWORDS`) runs unconditionally inside `screenIngredients`
-      and is never skipped. Any match always surfaces as a "🥩 Meat
-      detected — slaughter method needs verification" section and always
-      counts toward `hasRisk`, since halal status for these depends on the
-      slaughter method (zabiha), which ingredient text alone can never
-      confirm — meat presence must never silently produce a clean/"no
-      flags" result.
-    - **Barcode vs. OCR verdict differences**: both paths call the exact
-      same `screenIngredients`/`renderScreeningResults` — the
-      classification logic is already unified, so an observed mismatch
-      (e.g. barcode scan flags "doubtful", OCR of the same physical
-      package says "clean") is a data-provenance issue, not divergent
-      logic. The two most likely causes: (1) a translation artifact (see
-      the MyMemory bug above, now fixed) or (2) Open Food Facts'
-      crowd-sourced `ingredients_text` not matching this specific
-      package's actual regional/batch formulation. Both scan flows pass a
-      `source` string into `renderScreeningResults` that's shown in the
-      results ("Source: Open Food Facts database — may not exactly match
-      your physical package..." / "Source: Photographed label (OCR)...")
-      so the user understands why the two can legitimately differ, and
-      both flows log the exact screened text to the console
-      (`console.log('[Halal Scanner] Barcode/OCR path screening text', ...)`)
-      to make a future discrepancy diffable.
-    - **Performance**: OCR (Tesseract.js) is by far the slowest step in
-      the pipeline (client-side neural OCR + language data loading), well
-      ahead of the barcode fetch, translation, or classification steps.
-      Mitigations, in order of impact:
-      1. Image downscaling before OCR (see above) — processing time
-         scales with pixel count, and phone photos are far higher
-         resolution than OCR needs.
-      2. Fast English-first OCR pass, multilingual only as a fallback
-         (see above) — skips loading 4 unnecessary language packs in the
-         common case.
-      3. One Tesseract worker per language set, created once
-         (`getTesseractWorker`, keyed by language string) and reused for
-         every scan in the session instead of re-initializing per scan —
-         measured in preview testing at ~5000ms for a cold first scan vs.
-         ~120ms for a subsequent scan once the worker is warm.
-      4. Barcode lookups (`barcodeCache`) and translation results
-         (`translationCache`) cached in-memory per session (not
-         `localStorage`/`sessionStorage` — cleared on reload, consistent
-         with the no-persistence constraint) — a repeated exact lookup
-         costs ~0ms instead of a network round-trip.
-      Each stage logs its duration via `performance.now()` to the console
-      (`[Halal Scanner] OCR took Xms`, etc.) for future profiling. Not
-      pursued: parallelizing translation with classification — they're
-      NOT independent (classification runs on the translated text), so
-      there's nothing to parallelize there.
-    - **Back-button handling**: opening the scanner pushes one
-      `history.pushState` entry; a `popstate` listener intercepts the
-      browser/hardware back button to retreat one step inside the scanner
-      (subview/results → mode select → fully closed) instead of letting
-      the back press navigate to whatever history entry existed before
-      the app was opened, which on a phone can feel like the whole PWA
-      just closed. See `pushScannerHistoryState`/`popScannerHistoryStateIfNeeded`
-      in the JS.
+## Halal Scanner — pipeline design (frontend + backend split)
+Two entry paths, both end up calling the backend for classification:
+- **Barcode mode** (primary): html5-qrcode camera scan → `POST
+  /api/halal/barcode/lookup` (backend calls Open Food Facts, screens
+  server-side if English text was available). If Open Food Facts only
+  had non-English `ingredients_text`, the frontend translates it
+  client-side (MyMemory) and re-POSTs to `/api/halal/ingredients/analyze`
+  for a meaningful (English) screening — the backend never translates.
+- **OCR fallback**: photographed ingredients label →
+  `preprocessImageForOcr` (downscale to max 1600px + grayscale/contrast
+  boost via canvas — both a speed and an accuracy win) → `runOcr` (fast
+  English-only Tesseract pass first, `OCR_LANGUAGES_FAST='eng'`,
+  escalating to the full multilingual worker
+  `OCR_LANGUAGES_FULL='eng+ara+fra+spa+ind'` only if confidence is below
+  `OCR_CONFIDENCE_THRESHOLD` or text looks like gibberish) →
+  `isTextLikelyGibberish()` validates both the OCR output and the
+  translation (Unicode `\p{L}`/`\p{N}` ratio — real text in any script is
+  mostly letters) → client-side `translateToEnglish` → `POST
+  /api/halal/ingredients/analyze`.
+- **Never show garbled text**: a failing confidence/gibberish check shows
+  "This photo was hard to read clearly..." and sends "Try again" straight
+  back to the OCR capture view (`setScannerError(message, ocrView)`)
+  rather than ever displaying corrupted text as if it were a real result.
+- **Performance** (measured in testing): one Tesseract worker per
+  language set, created once and reused for the session — ~5000ms cold
+  vs. ~120ms once warm. Barcode lookups and translation chunks are
+  cached server-side/client-side respectively.
+- **Back-button handling**: opening the scanner pushes one
+  `history.pushState` entry; a `popstate` listener retreats one step
+  inside the scanner (subview/results → mode select → fully closed)
+  instead of letting the back press navigate to whatever existed before
+  the app was opened (which on a phone can feel like the PWA just closed).
 
 ## Why the cautious result labeling (do not weaken this without discussion)
-The Halal Scanner is a **keyword screening aid**, not a halal
-certification authority — it cannot see how an ingredient was actually
-sourced or processed, only whether a flagged word appears in the text.
-Because of that:
+The Halal Scanner (ingredients) and the Restaurant Halal Verifier are both
+**keyword/evidence-based screening aids**, not certification authorities
+— neither can see how something was actually sourced or processed, only
+whether known signals appear in available text/tags. Because of that:
 - Never render an absolute claim in either direction. No "Not halal", no
   "Haram" as a verdict label, no "Verified halal", no "Safe to consume",
-  no checkmark implying certainty.
-- Non-halal matches are phrased as "⚠️ Potential non-halal ingredients
+  no checkmark implying certainty — for restaurants OR ingredients.
+- Non-halal ingredient matches: "⚠️ Potential non-halal ingredients
   found: [list]" — a possibility to check, not a verdict.
-- Ambiguous matches are phrased as "🔍 Ambiguous ingredients that need
-  source verification — please verify: [list]", each with a short reason
-  why it's ambiguous (e.g. gelatin's animal source isn't specified by the
-  word alone).
-- A clean result is phrased as "No flagged ingredients detected in this
-  text" — explicitly about the text, not a certification of the product.
-- The disclaimer ("This is an automated keyword screening tool, not a
-  halal certification…") must always be shown alongside results, and the
-  raw extracted ingredient text must always be shown too, so the user can
-  read the actual source instead of only trusting the flags.
+- Ambiguous ingredient matches: "🔍 Ambiguous ingredients that need
+  source verification — please verify: [list]", each with a short reason.
+- Mandatory meat-type detection (`MEAT_KEYWORDS` in
+  `HalalIngredientAnalyzer.js`: beef, chicken, poultry, turkey, duck,
+  lamb, mutton, veal, goat, venison, meat — NOT pork/ham/bacon, already
+  covered more severely by `NON_HALAL_KEYWORDS`) runs unconditionally and
+  is never skipped — meat presence must never silently produce a clean
+  "no flags" result, since slaughter method (zabiha) can't be confirmed
+  from text alone.
+- A clean ingredient result: "No flagged ingredients detected in this
+  text" — about the text, not a certification of the product.
+- Restaurant "Unknown" is the correct, honest answer when no evidence
+  exists — never inferred from cuisine type alone.
+- The disclaimer(s) must always be shown alongside results, and the raw
+  extracted ingredient text must always be shown too.
 
-**Visual severity vs. wording**: both the "clearly flagged" and
-"ambiguous" tiers are styled in the red/orange warning color family (an
-overall red "⚠️ Warning — please verify before consuming" summary banner
-appears whenever either tier has any matches at all, vs. a green/neutral
-banner for a clean result) — ambiguous ingredients are NOT downplayed
-with a soft amber "just FYI" tone, because they still represent real
-non-halal risk that deserves a hard-to-miss visual. This was a deliberate
-choice to make risk visually loud while keeping the *wording* hedged —
-the color can shout "pay attention" without the text ever claiming
-certainty. Do not literally render the word "Haram" or "Not Halal" as a
-label even though users may describe results using those words verbally
-— the visual can be as alarming as needed, but the printed text must stay
-in the "potential / needs verification / please verify" register.
+**Visual severity vs. wording**: non-halal and ambiguous ingredient tiers
+are BOTH styled in the red/orange warning family (not a soft amber "just
+FYI" tone) — an overall red "⚠️ Warning — please verify before consuming"
+banner appears whenever either has any matches, vs. green/neutral for
+clean. This is deliberate: risk can be visually loud while the *wording*
+stays hedged. Do not literally render "Haram" or "Not Halal" as a label.
 
-This matters because a false "verified halal" claim could cause real harm
-if the wording is ever loosened — keep any future changes to this section
+This matters because a false "verified halal"/"confirmed" claim could
+cause real harm if the wording is ever loosened — keep any future changes
 at least as cautious as what's described here.
 
 ## Why these choices (for context on any future changes)
-- Vanilla JS instead of React/Vue: app has too little state to justify a
-  framework or build step, and the brief was "single file, no build tools."
-- Tailwind via CDN instead of compiled Tailwind: same reasoning — zero
-  build step, at the cost of a heavier uncompiled CSS payload.
-- These APIs specifically: they're the rare combination of free +
-  keyless + CORS-enabled, matching the "no registration" requirement.
-- html5-qrcode and Tesseract.js instead of a hosted scanning/OCR API:
-  same "no registration, no API keys" requirement — both run entirely
-  client-side and are loaded via plain CDN script tags, no build step.
-- MyMemory instead of a hosted translation API (e.g. Google Cloud
-  Translate): same "no registration, no API keys" requirement — MyMemory
-  works anonymously over a plain HTTPS GET, at the cost of a per-request
-  character cap (handled via chunking) and no uptime/rate guarantees.
-
-## Deployment
-Hosted as a static site on GitHub Pages. All 5 files live at the repo root
-(not in a subfolder) since they reference each other by relative path.
+- Provider-interface backend architecture: required by the product spec
+  that drove the pivot — see "Architecture history" above.
+- These specific free providers: the rare combination of free + keyless
+  + usable at this app's scale, matching the "no paid API" requirement.
+- Tesseract.js/MyMemory stay client-side rather than moving to the
+  backend: keeps OCR cost at zero (no server-side compute/GPU), and
+  keeps photos from ever leaving the device — only extracted text is
+  sent anywhere.
+- In-memory cache/rate-limiting instead of Redis from day one: this
+  app's scale doesn't need it yet, and the `CacheService`/
+  `RateLimitService` interfaces make swapping in Redis later a
+  contained change (see README).
 
 ## When making changes
-- Keep everything in `index.html` unless a change specifically needs a new
-  file (e.g. a new icon size).
-- If you touch `index.html` (or anything else in the app shell), bump
-  `CACHE_NAME` in `sw.js` (e.g. `nearme-weather-v9`) — otherwise the
-  service worker's cache-first strategy keeps serving whatever it first
-  installed, since the byte-identical `sw.js` never re-triggers install.
+- If you touch `frontend/index.html` (or anything else in the app
+  shell), bump `CACHE_NAME` in `frontend/sw.js` (e.g. `nearme-weather-v11`)
+  — otherwise the service worker's cache-first strategy keeps serving
+  whatever it first installed, since the byte-identical `sw.js` never
+  re-triggers install.
 - Preserve the distance-labeling behavior (always state what location
   distances are measured FROM).
-- Preserve copyright/attribution: no API keys should ever be introduced for
-  the three core APIs above — that would break the "no registration" premise
-  of the whole app.
+- Preserve free-first: don't introduce a paid API, even as an "optional"
+  path, without the user explicitly asking (see "Hard constraints").
+- Run `npm test` and `npm run lint` in `backend/` after changing any
+  provider/service code — the rules-engine services have real unit test
+  coverage, keep it passing.
+- See README for local setup, deployment, environment variables, and the
+  full list of known restaurant-verification limitations.
