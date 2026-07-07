@@ -116,6 +116,15 @@ backend/          Node.js + Express API (ES modules, `"type": "module"`).
 
 ## Free API providers used (see README for the full table + rate-limit/attribution notes)
 - **Open-Meteo** (weather) — `backend/src/providers/weather/OpenMeteoProvider.js`.
+  Cached (10 min TTL — much shorter than `CACHE_TTL_SECONDS` since
+  weather goes stale fast) and retried with backoff on 429/5xx. Added
+  after a deployed Render free-tier instance hit a consistent 429 from
+  Open-Meteo while the identical request worked from a different
+  network — the same "shared free-tier outbound IP" risk already
+  documented for Nominatim, now confirmed for Open-Meteo too. Caching
+  reduces this app's own contribution to that shared quota; it can't
+  fix a quota already exhausted by other traffic on the same IP (see
+  README "Centralization tradeoff").
 - **Photon** (geocoding, default) — `backend/src/providers/geocoding/PhotonProvider.js`, komoot's OSM-based geocoder. **OpenStreetMap Nominatim** is also fully implemented (`NominatimProvider.js`) and selectable via `GEOCODING_PROVIDER=nominatim`, but is NOT the default — Nominatim's public instance returned `403 Access denied` for server-side calls from a cloud/sandboxed IP during development, a real risk once geocoding is centralized through one backend instead of many browsers. Photon requires `&lang=en` on requests to avoid returning place names in the local script.
 - **OpenStreetMap Overpass** (places: parks, outdoor activities, restaurants) — `backend/src/providers/places/OverpassProvider.js`.
 - **Open Food Facts** (barcode/product lookup) — `backend/src/providers/product/OpenFoodFactsProvider.js`.

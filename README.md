@@ -34,7 +34,7 @@ backend/         Node.js + Express API. Provider-based: every external
 
 | Concern | Default provider | Notes |
 |---|---|---|
-| Weather | [Open-Meteo](https://open-meteo.com/) | Free, keyless for non-commercial use. |
+| Weather | [Open-Meteo](https://open-meteo.com/) | Free, keyless for non-commercial use. Cached server-side (10 min TTL) — see rate-limit notes below. |
 | Geocoding | [Photon](https://photon.komoot.io/) (default) or [OpenStreetMap Nominatim](https://nominatim.org/) | Both free, keyless, OSM-based. Photon is the default — see rate-limit notes below for why. Switch with `GEOCODING_PROVIDER=nominatim`. |
 | Places (parks, outdoor activities, restaurants) | [OpenStreetMap Overpass API](https://overpass-api.de/) | Free, keyless, shared community resource. |
 | Product/barcode lookup | [Open Food Facts](https://world.openfoodfacts.org/) | Free, keyless, community-editable product database. |
@@ -75,15 +75,28 @@ interfaces make it straightforward to add one later if ever needed (see
   server also rejects requests with no `User-Agent` header (a 406 — this
   was hit and fixed during development; Node's `fetch` doesn't send a
   default one, unlike `curl`).
+- **Open-Meteo**: also cached now (10 minute TTL, separate from
+  `CACHE_TTL_SECONDS` since weather goes stale much faster than
+  geocoding/places data), with retry-with-backoff on 429/5xx. **This was
+  hit in production**: the deployed Render free-tier instance got a
+  consistent `429` from Open-Meteo while the identical request worked
+  fine from a different network — see "Centralization tradeoff" below,
+  this is that risk actually happening, not a hypothetical.
 - **Centralization tradeoff**: because these calls now go through YOUR
   backend instead of directly from each user's own browser, your
   server's IP is responsible for every user's combined request volume —
-  a busier app hits Nominatim/Overpass's fair-use limits faster than the
-  old per-browser architecture would have. If this app grows, the
-  documented mitigation path is: increase `CACHE_TTL_SECONDS`, or swap in
-  a paid geocoding provider / self-hosted Nominatim instance behind the
-  same `GeocodingProvider` interface — no route or frontend changes
-  needed.
+  a busier app (or, on a free host, OTHER customers sharing the same
+  outbound IP pool) hits these providers' fair-use/rate limits faster
+  than the old per-browser architecture would have. This isn't
+  theoretical: it was observed directly for both Nominatim (403) and
+  Open-Meteo (429) from a Render free-tier deployment. If this keeps
+  happening, the mitigation path is: increase the relevant cache TTL,
+  move to a host with a dedicated/static outbound IP, or swap in a paid
+  provider — all behind the same provider interfaces, no route or
+  frontend changes needed. A currently-rate-limited provider typically
+  recovers on its own once its rate-limit window resets; there's no
+  code fix for "the shared IP is temporarily over quota," only ways to
+  reduce how much this app contributes to it.
 - **Open Food Facts**: no strict published rate limit for this volume of
   use; results are cached (hits and misses both) the same way.
 

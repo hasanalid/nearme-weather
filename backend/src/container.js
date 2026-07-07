@@ -19,7 +19,7 @@ export function createContainer() {
   const rateLimiter = new RateLimitService();
 
   const weatherProviders = {
-    openmeteo: () => new OpenMeteoProvider(),
+    openmeteo: () => new OpenMeteoProvider({ cache, cacheTtlSeconds: config.cacheTtlSeconds }),
   };
   const geocodingProviders = {
     // Default — see PhotonProvider.js for why: Nominatim's public
