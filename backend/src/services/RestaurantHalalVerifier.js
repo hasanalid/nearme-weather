@@ -36,6 +36,27 @@ function cuisineLooksMixed(cuisine) {
   return cuisine.split(/[;,]/).map((s) => s.trim()).filter(Boolean).length > 1;
 }
 
+// Cuisines where halal food is the strong cultural/religious norm across
+// most of the world — NOT a guarantee for any single restaurant (a
+// Turkish or Lebanese restaurant outside its home region could still be
+// run non-halal), which is why this is only ever used as a low-confidence
+// LAST-RESORT signal when no stronger tag/text evidence exists at all,
+// and pork evidence or an explicit diet:halal=no tag always overrides it
+// (both are checked earlier). This is a deliberate, narrow exception to
+// "don't infer from cuisine alone" — not an abandonment of that
+// principle — added because leaving these consistently as "Unknown" was
+// unhelpful when the cuisine itself is a genuine (if imperfect) signal.
+const HALAL_LIKELY_CUISINE_KEYWORDS = [
+  'turkish', 'lebanese', 'syrian', 'yemeni', 'iranian', 'persian', 'afghan',
+  'pakistani', 'bangladeshi', 'moroccan', 'tunisian', 'algerian', 'egyptian',
+  'saudi', 'emirati', 'kurdish', 'arab', 'kebab', 'shawarma', 'indonesian',
+  'malaysian', 'somali', 'sudanese', 'middle_eastern', 'middle eastern',
+];
+
+function cuisineSuggestsLikelyHalal(cuisine) {
+  return HALAL_LIKELY_CUISINE_KEYWORDS.some((kw) => cuisine.includes(kw));
+}
+
 export class RestaurantHalalVerifier {
   constructor({ webMenuChecker, enableWebMenuCheck }) {
     this.webMenuChecker = webMenuChecker;
@@ -115,6 +136,20 @@ export class RestaurantHalalVerifier {
         classification = HALAL_CLASSIFICATION.LIKELY_HALAL;
         confidence = 'medium';
         reasons.push('Evidence suggests halal options are available, but it is not fully confirmed.');
+      }
+    } else if (cuisineSuggestsLikelyHalal(cuisine)) {
+      // Weaker than the block above — no explicit halal tag/text, just a
+      // cuisine that's commonly (not universally) halal in practice.
+      // Always 'low' confidence and always phrased as unconfirmed.
+      evidence.push(`OpenStreetMap cuisine tag ("${tags.cuisine}") is commonly associated with halal food`);
+      if (cuisineLooksMixed(cuisine)) {
+        classification = HALAL_CLASSIFICATION.MIXED_NEEDS_VERIFICATION;
+        confidence = 'low';
+        reasons.push(`This cuisine ("${tags.cuisine}") is commonly halal, but the listing also suggests other cuisine types — please verify before visiting.`);
+      } else {
+        classification = HALAL_CLASSIFICATION.LIKELY_HALAL;
+        confidence = 'low';
+        reasons.push(`This cuisine type ("${tags.cuisine}") is commonly associated with halal food in much of the world — this is not confirmed for this specific restaurant, please verify.`);
       }
     } else {
       classification = HALAL_CLASSIFICATION.UNKNOWN;

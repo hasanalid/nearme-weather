@@ -68,6 +68,43 @@ test('deep mode with halal-certified mention on official website -> halal confir
   assert.equal(result.sourceType, 'official_website');
 });
 
+test('cuisine commonly associated with halal (e.g. Turkish) with no other evidence -> likely halal, low confidence', async () => {
+  const verifier = makeVerifier();
+  const result = await verifier.verify({ tags: { amenity: 'restaurant', cuisine: 'turkish' } });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.LIKELY_HALAL);
+  assert.equal(result.confidence, 'low');
+  assert.equal(result.needsManualVerification, true);
+});
+
+test('halal-likely cuisine mixed with an unrelated cuisine -> mixed, needs verification', async () => {
+  const verifier = makeVerifier();
+  const result = await verifier.verify({ tags: { cuisine: 'lebanese;pizza' } });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.MIXED_NEEDS_VERIFICATION);
+  assert.equal(result.confidence, 'low');
+});
+
+test('halal-likely cuisine is overridden by an explicit diet:halal=no tag', async () => {
+  const verifier = makeVerifier();
+  const result = await verifier.verify({ tags: { cuisine: 'turkish', 'diet:halal': 'no' } });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.NON_HALAL);
+});
+
+test('halal-likely cuisine is overridden by pork found on the official menu (deep mode)', async () => {
+  const verifier = makeVerifier({ webMenuText: 'Our menu includes bacon.', enableWebMenuCheck: true });
+  const result = await verifier.verify(
+    { tags: { cuisine: 'turkish' }, websiteMenu: 'https://example.com/menu' },
+    { deep: true }
+  );
+  assert.equal(result.classification, HALAL_CLASSIFICATION.NON_HALAL);
+  assert.equal(result.porkDetected, true);
+});
+
+test('cuisine with no halal association at all stays unknown (e.g. Chinese)', async () => {
+  const verifier = makeVerifier();
+  const result = await verifier.verify({ tags: { cuisine: 'chinese' } });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.UNKNOWN);
+});
+
 test('ENABLE_WEB_MENU_CHECK=false skips the website fetch entirely, even in deep mode', async () => {
   let fetchCalled = false;
   const webMenuChecker = { fetchPageText: async () => { fetchCalled = true; return 'pork'; } };

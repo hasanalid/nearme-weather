@@ -27,6 +27,51 @@ function buildQuery(tagPairs, lat, lon, radiusMeters) {
 out center ${RESULT_LIMIT};`;
 }
 
+// Overpass's public instance can be genuinely slow/overloaded for
+// certain query shapes — single-ID lookups (used by getById) were
+// observed failing with a 504 "server is probably too busy" roughly half
+// the time in testing, even though a plain retry a moment later usually
+// succeeds. Radius/"around" searches are less affected (they use a
+// spatial index) but can hit the same issue under load. Retrying a
+// couple of times with a short gap turns an intermittent 504 into a
+// transparent success far more often than surfacing it to the user
+// immediately. The timeout here (27s) is deliberately ABOVE the query's
+// own `[timeout:25]`, so we don't abort client-side before Overpass's
+// own server-side timeout would have naturally resolved the request.
+async function executeOverpassQuery(query, rateLimiter, { retries = 2 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await rateLimiter.schedule('overpass', 1000, async () => {
+        const res = await fetchWithTimeout(
+          OVERPASS_ENDPOINT,
+          { method: 'POST', body: query, headers: OVERPASS_HEADERS },
+          27000
+        );
+        if (!res.ok) {
+          const err = new Error(`Overpass request failed (${res.status})`);
+          err.status = res.status;
+          throw err;
+        }
+        return res.json();
+      });
+    } catch (err) {
+      lastError = err;
+      // 429 is Overpass explicitly telling us to slow down (distinct from a
+      // transient 502/503/504 "server is busy" — a plain 5xx is worth a
+      // quick retry, but hammering a 429 again immediately is exactly the
+      // opposite of respecting a shared resource). Other 4xx errors (bad
+      // query) won't fix themselves on retry either.
+      const isRateLimited = err.status === 429;
+      const isTransientServerError = err.status >= 500;
+      if (!isRateLimited && !isTransientServerError) break;
+      if (attempt === retries) break;
+      await new Promise((resolve) => setTimeout(resolve, isRateLimited ? 3000 : 800 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 function addressFromTags(tags) {
   const parts = [tags['addr:housenumber'], tags['addr:street'], tags['addr:city']].filter(Boolean);
   return parts.length ? parts.join(' ') : null;
@@ -77,22 +122,14 @@ export class OverpassProvider extends PlacesProvider {
     if (cached) return cached;
 
     const query = buildQuery(tagPairs, lat, lon, radiusMeters);
-
-    const data = await this.rateLimiter.schedule('overpass', 1000, async () => {
-      const res = await fetchWithTimeout(
-        OVERPASS_ENDPOINT,
-        { method: 'POST', body: query, headers: OVERPASS_HEADERS },
-        20000
-      );
-      if (!res.ok) throw new Error(`Overpass request failed (${res.status})`);
-      return res.json();
-    });
+    const data = await executeOverpassQuery(query, this.rateLimiter);
 
     const seen = new Set();
     const places = (data.elements || [])
       .map((el) => normalizeElement(el, category))
       .filter((place) => {
         if (!place) return false;
+        if (!place.tags.name) return false; // skip unnamed places - not useful to show without a name
         if (seen.has(place.id)) return false;
         seen.add(place.id);
         return true;
@@ -113,16 +150,7 @@ export class OverpassProvider extends PlacesProvider {
     if (cached) return cached;
 
     const query = `[out:json][timeout:25];\n${osmType}(${osmId});\nout center;`;
-
-    const data = await this.rateLimiter.schedule('overpass', 1000, async () => {
-      const res = await fetchWithTimeout(
-        OVERPASS_ENDPOINT,
-        { method: 'POST', body: query, headers: OVERPASS_HEADERS },
-        20000
-      );
-      if (!res.ok) throw new Error(`Overpass request failed (${res.status})`);
-      return res.json();
-    });
+    const data = await executeOverpassQuery(query, this.rateLimiter);
 
     const el = (data.elements || [])[0];
     if (!el) return null;

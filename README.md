@@ -168,9 +168,20 @@ certification authority. Please read this before trusting or extending
 its output:
 
 - **Data completeness**: OpenStreetMap doesn't have a `diet:halal` tag
-  (or any halal-related tag) for most restaurants worldwide. Most results
+  (or any halal-related tag) for most restaurants worldwide. Many results
   will honestly be "Unknown" — that's the correct, honest answer when no
   evidence exists, not a bug.
+- **Cuisine-based heuristic**: as a narrow exception to "never infer from
+  cuisine alone," restaurants tagged with a cuisine commonly associated
+  with halal food worldwide (Turkish, Lebanese, Pakistani, Persian,
+  Moroccan, etc. — see `HALAL_LIKELY_CUISINE_KEYWORDS` in
+  `RestaurantHalalVerifier.js`) get a **"Likely Halal," low-confidence**
+  classification instead of "Unknown" when no stronger evidence exists.
+  This is still just a heuristic, not a confirmation — a specific
+  restaurant using one of these cuisines can still be run non-halal,
+  which is why it's always low confidence and always says "not confirmed,
+  please verify." Pork evidence or an explicit `diet:halal=no` tag still
+  overrides it.
 - **No ratings**: OSM has no rating/review field, unlike commercial
   providers (Google Places, Yelp). The UI simply omits a rating rather
   than fabricating one.

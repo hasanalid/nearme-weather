@@ -140,6 +140,29 @@ capped at 30 results, cached per rounded-coordinate+radius key.
 is a separate endpoint since it additionally attaches a `halal`
 classification to every result (see below).
 
+**Unnamed places are filtered out** (`OverpassProvider.search()`, the
+`if (!place.tags.name) return false` line) — a place with no `name` tag
+isn't useful to show the user regardless of category, so these are
+dropped entirely rather than displayed as "Unnamed place." `getById()`
+doesn't re-check this since it's only ever called with an id sourced
+from an already-filtered list.
+
+**Overpass retry logic** (`executeOverpassQuery` in
+`OverpassProvider.js`, shared by both `search()` and `getById()`):
+single-ID lookups (used by the restaurant "Deeper Check" button) were
+observed failing with a 504 "server is probably too busy" roughly half
+the time in testing — a genuine characteristic of the public instance's
+performance for that query shape, not a bug in the query itself (a
+manual retry a moment later reliably succeeds). Retries up to 2 more
+times with backoff on a `5xx`. A `429` (explicit rate limit, distinct
+from a transient `5xx`) gets a longer, single backoff instead of being
+hammered again immediately — don't collapse this distinction back into
+one generic "retry on any failure" if this code is touched again, it
+was added deliberately after observing a real 429 during testing.
+Timeout is 27s, deliberately above the query's own `[timeout:25]`, so we
+don't abort client-side before Overpass's own server-side timeout would
+have naturally resolved things.
+
 ## Restaurant halal verification (`RestaurantHalalVerifier`)
 Evidence-based, never claims certainty — see README "Restaurant halal
 verification — known limitations" for the full picture. Key design
@@ -159,8 +182,26 @@ points to preserve:
   `diet:halal=only`/certified text → `diet:halal=yes`/halal-options
   text/cuisine mention (split into `mixed_needs_verification` vs.
   `likely_halal` depending on whether the cuisine tag looks like a mixed
-  menu) → `unknown` (no evidence at all — **never** inferred from
-  cuisine type alone).
+  menu) → **cuisine-based low-confidence heuristic** (see below) →
+  `unknown` (no other evidence at all).
+- **Cuisine-based "likely halal" heuristic** (`HALAL_LIKELY_CUISINE_KEYWORDS`
+  /`cuisineSuggestsLikelyHalal` in `RestaurantHalalVerifier.js`): a
+  deliberate, narrow exception to "never infer from cuisine alone,"
+  added because leaving every Turkish/Lebanese/Pakistani/etc. restaurant
+  as "Unknown" (when no stronger tag/text evidence exists) was unhelpful
+  given halal food is the strong cultural norm for those cuisines in most
+  of the world. Always `confidence: 'low'` (weaker than an explicit
+  `diet:halal=yes` tag, which is `'medium'`), always phrased as
+  unconfirmed ("...this is not confirmed for this specific restaurant,
+  please verify"), and still fully overridden by pork evidence or
+  `diet:halal=no` (both checked earlier in the same priority chain). Do
+  not upgrade this to `'medium'`/`'high'` confidence or drop the
+  "not confirmed" wording — a specific restaurant using a halal-associated
+  cuisine's name is still not the same as it actually serving halal food.
+  A cuisine NOT on this list (Chinese, Italian, Japanese, generic
+  burger/coffee/pizza, etc.) correctly stays `unknown` with no evidence —
+  this heuristic is a narrow, named exception, not a general
+  cuisine-inference rule.
 - **Frontend UI**: `HALAL_CLASSIFICATION_META` in `frontend/index.html`
   maps each classification to an emoji + color; every card shows a
   pork-detected warning badge when applicable, and a "⚠️ Please verify
