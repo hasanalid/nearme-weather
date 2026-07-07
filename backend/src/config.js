@@ -9,7 +9,11 @@ export const config = {
 
   providers: {
     weather: process.env.WEATHER_PROVIDER || 'openmeteo',
-    geocoding: process.env.GEOCODING_PROVIDER || 'nominatim',
+    // Default is photon, not nominatim — see PhotonProvider.js for why
+    // (Nominatim's public instance blocked server-side calls from a
+    // cloud/sandboxed IP during development). Nominatim is still fully
+    // supported; set GEOCODING_PROVIDER=nominatim to use it instead.
+    geocoding: process.env.GEOCODING_PROVIDER || 'photon',
     places: process.env.PLACES_PROVIDER || 'overpass',
     product: process.env.PRODUCT_PROVIDER || 'openfoodfacts',
   },

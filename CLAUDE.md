@@ -116,7 +116,7 @@ backend/          Node.js + Express API (ES modules, `"type": "module"`).
 
 ## Free API providers used (see README for the full table + rate-limit/attribution notes)
 - **Open-Meteo** (weather) — `backend/src/providers/weather/OpenMeteoProvider.js`.
-- **OpenStreetMap Nominatim** (geocoding) — `backend/src/providers/geocoding/NominatimProvider.js`.
+- **Photon** (geocoding, default) — `backend/src/providers/geocoding/PhotonProvider.js`, komoot's OSM-based geocoder. **OpenStreetMap Nominatim** is also fully implemented (`NominatimProvider.js`) and selectable via `GEOCODING_PROVIDER=nominatim`, but is NOT the default — Nominatim's public instance returned `403 Access denied` for server-side calls from a cloud/sandboxed IP during development, a real risk once geocoding is centralized through one backend instead of many browsers. Photon requires `&lang=en` on requests to avoid returning place names in the local script.
 - **OpenStreetMap Overpass** (places: parks, outdoor activities, restaurants) — `backend/src/providers/places/OverpassProvider.js`.
 - **Open Food Facts** (barcode/product lookup) — `backend/src/providers/product/OpenFoodFactsProvider.js`.
 - **Tesseract.js** (OCR) — stays entirely client-side in `frontend/index.html`, never sends images to any server.

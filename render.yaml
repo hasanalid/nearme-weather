@@ -15,7 +15,7 @@ services:
       - key: WEATHER_PROVIDER
         value: openmeteo
       - key: GEOCODING_PROVIDER
-        value: nominatim
+        value: photon
       - key: PLACES_PROVIDER
         value: overpass
       - key: PRODUCT_PROVIDER

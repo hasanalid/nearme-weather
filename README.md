@@ -35,7 +35,7 @@ backend/         Node.js + Express API. Provider-based: every external
 | Concern | Default provider | Notes |
 |---|---|---|
 | Weather | [Open-Meteo](https://open-meteo.com/) | Free, keyless for non-commercial use. |
-| Geocoding | [OpenStreetMap Nominatim](https://nominatim.org/) | Free, keyless, but a shared community resource — see rate-limit notes below. |
+| Geocoding | [Photon](https://photon.komoot.io/) (default) or [OpenStreetMap Nominatim](https://nominatim.org/) | Both free, keyless, OSM-based. Photon is the default — see rate-limit notes below for why. Switch with `GEOCODING_PROVIDER=nominatim`. |
 | Places (parks, outdoor activities, restaurants) | [OpenStreetMap Overpass API](https://overpass-api.de/) | Free, keyless, shared community resource. |
 | Product/barcode lookup | [Open Food Facts](https://world.openfoodfacts.org/) | Free, keyless, community-editable product database. |
 | Ingredient OCR | [Tesseract.js](https://github.com/naptha/tesseract.js) | Runs entirely client-side (in the browser) — no image is ever sent to a server for OCR. |
@@ -49,12 +49,26 @@ interfaces make it straightforward to add one later if ever needed (see
 
 ## Rate-limit notes (please read before deploying at any scale)
 
-- **Nominatim**: max 1 request/second, enforced server-side via
-  `RateLimitService`. Requires a real, identifying `User-Agent` — set
-  `NOMINATIM_USER_AGENT` in your `.env` before deploying (Nominatim's
-  policy: <https://operations.osmfoundation.org/policies/nominatim/>).
-  Results are cached (`CACHE_TTL_SECONDS`) so repeat lookups don't re-hit
-  Nominatim at all.
+- **Why Photon is the default, not Nominatim**: during development,
+  Nominatim's public instance returned `403 Access denied` for
+  server-side geocoding calls made from a cloud/sandboxed IP — this is a
+  real risk for ANY backend-centralized deployment (see "Centralization
+  tradeoff" below), not just this dev environment. Photon (run by komoot,
+  same underlying OSM data) worked cleanly from the same IP in testing.
+  Both are still fully supported behind the same `GeocodingProvider`
+  interface — switch back with `GEOCODING_PROVIDER=nominatim` if you'd
+  rather use Nominatim (e.g. if you're self-hosting it). Note: Photon
+  defaults to returning place names in the local script; we pass
+  `lang=en` to keep results in English, matching the app's UI.
+- **Nominatim** (if selected): max 1 request/second, enforced server-side
+  via `RateLimitService`. Requires a real, identifying `User-Agent` — set
+  `NOMINATIM_USER_AGENT` in your `.env` before switching to it
+  (Nominatim's policy:
+  <https://operations.osmfoundation.org/policies/nominatim/>). Results
+  are cached (`CACHE_TTL_SECONDS`) so repeat lookups don't re-hit it at all.
+- **Photon**: no stricter published policy than Nominatim's, but still a
+  shared community-run public instance — throttled (1/second) and cached
+  the same way, out of the same courtesy.
 - **Overpass**: no official rate limit as strict as Nominatim's, but it's
   explicitly a donated, shared community resource — outbound calls are
   still throttled (1/second) and results cached the same way. Overpass's
