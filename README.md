@@ -34,7 +34,7 @@ backend/         Node.js + Express API. Provider-based: every external
 
 | Concern | Default provider | Notes |
 |---|---|---|
-| Weather | [Open-Meteo](https://open-meteo.com/) | Free, keyless for non-commercial use. Cached server-side (10 min TTL) — see rate-limit notes below. |
+| Weather | [Open-Meteo](https://open-meteo.com/) (primary) with automatic fallback to [met.no](https://api.met.no/) | Both free, keyless. Cached server-side (10 min TTL). Falls back to met.no automatically if Open-Meteo errors — see rate-limit notes below for why this matters in practice, not just in theory. |
 | Geocoding | [Photon](https://photon.komoot.io/) (default) or [OpenStreetMap Nominatim](https://nominatim.org/) | Both free, keyless, OSM-based. Photon is the default — see rate-limit notes below for why. Switch with `GEOCODING_PROVIDER=nominatim`. |
 | Places (parks, outdoor activities, restaurants) | [OpenStreetMap Overpass API](https://overpass-api.de/) | Free, keyless, shared community resource. |
 | Product/barcode lookup | [Open Food Facts](https://world.openfoodfacts.org/) | Free, keyless, community-editable product database. |

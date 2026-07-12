@@ -2,6 +2,8 @@ import { config } from './config.js';
 import { InMemoryCacheService } from './cache/CacheService.js';
 import { RateLimitService } from './rateLimit/RateLimitService.js';
 import { OpenMeteoProvider } from './providers/weather/OpenMeteoProvider.js';
+import { MetNoProvider } from './providers/weather/MetNoProvider.js';
+import { FailoverWeatherProvider } from './providers/weather/FailoverWeatherProvider.js';
 import { NominatimProvider } from './providers/geocoding/NominatimProvider.js';
 import { PhotonProvider } from './providers/geocoding/PhotonProvider.js';
 import { OverpassProvider } from './providers/places/OverpassProvider.js';
@@ -19,7 +21,17 @@ export function createContainer() {
   const rateLimiter = new RateLimitService();
 
   const weatherProviders = {
-    openmeteo: () => new OpenMeteoProvider({ cache, cacheTtlSeconds: config.cacheTtlSeconds }),
+    // Default: Open-Meteo as primary, automatically failing over to
+    // met.no if Open-Meteo errors (see FailoverWeatherProvider for why —
+    // this was a real production incident, not preventative). Both
+    // remain independently selectable too (WEATHER_PROVIDER=openmeteo or
+    // =metno) if you want one without the other.
+    openmeteo: () =>
+      new FailoverWeatherProvider(
+        new OpenMeteoProvider({ cache, cacheTtlSeconds: config.cacheTtlSeconds }),
+        new MetNoProvider()
+      ),
+    metno: () => new MetNoProvider(),
   };
   const geocodingProviders = {
     // Default — see PhotonProvider.js for why: Nominatim's public

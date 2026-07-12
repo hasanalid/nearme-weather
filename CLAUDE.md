@@ -115,16 +115,36 @@ backend/          Node.js + Express API (ES modules, `"type": "module"`).
   mx-auto`).
 
 ## Free API providers used (see README for the full table + rate-limit/attribution notes)
-- **Open-Meteo** (weather) — `backend/src/providers/weather/OpenMeteoProvider.js`.
+- **Open-Meteo** (weather, primary) — `backend/src/providers/weather/OpenMeteoProvider.js`.
   Cached (10 min TTL — much shorter than `CACHE_TTL_SECONDS` since
-  weather goes stale fast) and retried with backoff on 429/5xx. Added
-  after a deployed Render free-tier instance hit a consistent 429 from
-  Open-Meteo while the identical request worked from a different
-  network — the same "shared free-tier outbound IP" risk already
-  documented for Nominatim, now confirmed for Open-Meteo too. Caching
-  reduces this app's own contribution to that shared quota; it can't
-  fix a quota already exhausted by other traffic on the same IP (see
-  README "Centralization tradeoff").
+  weather goes stale fast) and retried with backoff on 429/5xx. Caching
+  reduces this app's own contribution to Open-Meteo's shared quota; it
+  can't fix a quota already exhausted by other traffic on the same IP
+  (see README "Centralization tradeoff").
+- **met.no / MET Norway** (weather, automatic fallback) —
+  `backend/src/providers/weather/MetNoProvider.js`, wired in via
+  `FailoverWeatherProvider.js`. Added after a **real production
+  incident**: a deployed Render free-tier instance got a *persistent*
+  429 from Open-Meteo (still failing over an hour later — confirmed via
+  direct testing that Open-Meteo itself was fine and the exact same
+  request worked from a different network, so this was IP-specific, not
+  a global outage) while weather stayed stuck loading in the UI with no
+  way to recover short of a deploy. `WEATHER_PROVIDER=openmeteo` (the
+  default) now transparently tries Open-Meteo first and falls back to
+  met.no if it throws — `WEATHER_PROVIDER=metno` uses met.no only.
+  Normalizes met.no's data (real UTC timestamps, `symbol_code` strings,
+  no built-in timezone/daily-summary) into the exact same schema
+  Open-Meteo produces, so the frontend needed zero changes. Two
+  approximations worth knowing about (acceptable since this is a
+  fallback path, not the common case): (1) UTC offset is estimated from
+  longitude (`~1h per 15°`) since met.no has no per-location timezone
+  endpoint — imprecise near DST transitions/timezone borders; (2)
+  sunrise/sunset is fetched once for "today" and reused for the rest of
+  the week rather than fetched per-day (7x fewer requests; real
+  day-to-day drift is only ~1-4 minutes outside polar regions). Requires
+  a real `User-Agent` (met.no's usage policy, same requirement as
+  Nominatim) — hardcoded in `MetNoProvider.js`, not env-configurable
+  since it's a fallback path, not user-facing branding.
 - **Photon** (geocoding, default) — `backend/src/providers/geocoding/PhotonProvider.js`, komoot's OSM-based geocoder. **OpenStreetMap Nominatim** is also fully implemented (`NominatimProvider.js`) and selectable via `GEOCODING_PROVIDER=nominatim`, but is NOT the default — Nominatim's public instance returned `403 Access denied` for server-side calls from a cloud/sandboxed IP during development, a real risk once geocoding is centralized through one backend instead of many browsers. Photon requires `&lang=en` on requests to avoid returning place names in the local script.
 - **OpenStreetMap Overpass** (places: parks, outdoor activities, restaurants) — `backend/src/providers/places/OverpassProvider.js`.
 - **Open Food Facts** (barcode/product lookup) — `backend/src/providers/product/OpenFoodFactsProvider.js`.
@@ -261,13 +281,25 @@ Two entry paths, both end up calling the backend for classification:
   `preprocessImageForOcr` (downscale to max 1600px + grayscale/contrast
   boost via canvas — both a speed and an accuracy win) → `runOcr` (fast
   English-only Tesseract pass first, `OCR_LANGUAGES_FAST='eng'`,
-  escalating to the full multilingual worker
-  `OCR_LANGUAGES_FULL='eng+ara+fra+spa+ind'` only if confidence is below
+  escalating to the full multilingual worker only if confidence is below
   `OCR_CONFIDENCE_THRESHOLD` or text looks like gibberish) →
   `isTextLikelyGibberish()` validates both the OCR output and the
   translation (Unicode `\p{L}`/`\p{N}` ratio — real text in any script is
   mostly letters) → client-side `translateToEnglish` → `POST
   /api/halal/ingredients/analyze`.
+  `OCR_LANGUAGES_FULL` covers English, Arabic, French, Spanish,
+  Indonesian/Malay, Hindi, Tamil, Chinese (simplified), Urdu, Bengali,
+  Turkish, German, Portuguese, and Russian (14 languages total) — chosen
+  to span the scripts most likely to appear on food packaging worldwide,
+  not just a handful. All 14 verified to download/load successfully in
+  a single combined worker. Extending this further is fine (add more
+  Tesseract language codes to the `+`-joined string), but be mindful of
+  the tradeoff documented in the constant's own comment: this tier's
+  trained-data download is meaningfully larger the more languages are
+  added (each language's file ranges from ~2MB for compact Latin-script
+  languages to ~10-15MB for CJK), though Tesseract.js caches it in the
+  browser's IndexedDB after first use, so it's a one-time cost per
+  device, not per-scan.
 - **Never show garbled text**: a failing confidence/gibberish check shows
   "This photo was hard to read clearly..." and sends "Try again" straight
   back to the OCR capture view (`setScannerError(message, ocrView)`)
@@ -335,7 +367,7 @@ at least as cautious as what's described here.
 
 ## When making changes
 - If you touch `frontend/index.html` (or anything else in the app
-  shell), bump `CACHE_NAME` in `frontend/sw.js` (e.g. `nearme-weather-v11`)
+  shell), bump `CACHE_NAME` in `frontend/sw.js` (e.g. `nearme-weather-v12`)
   — otherwise the service worker's cache-first strategy keeps serving
   whatever it first installed, since the byte-identical `sw.js` never
   re-triggers install.

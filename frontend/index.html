@@ -848,9 +848,18 @@ switchToOcrBtn.addEventListener('click', async () => {
 //      partly in English), only escalating to the full multilingual
 //      worker if that pass looks unreliable — see runOcr below. This
 //      keeps the common case fast while still supporting any language.
+//
+// Multilingual coverage: the fallback tier covers English, Arabic,
+// French, Spanish, Indonesian/Malay, Hindi, Tamil, Chinese (simplified),
+// Urdu, Bengali, Turkish, German, Portuguese, and Russian — chosen to
+// span the scripts/languages most likely to appear on food packaging
+// worldwide, not just a handful. Tesseract.js downloads each language's
+// trained-data file the first time it's used and caches it in the
+// browser's IndexedDB, so the (larger, one-time) download cost for this
+// tier is only paid once per device, not once per scan.
 // ---------------------------------------------------------------------
 const OCR_LANGUAGES_FAST = 'eng';
-const OCR_LANGUAGES_FULL = 'eng+ara+fra+spa+ind'; // English, Arabic, French, Spanish, Indonesian/Malay
+const OCR_LANGUAGES_FULL = 'eng+ara+fra+spa+ind+hin+tam+chi_sim+urd+ben+tur+deu+por+rus';
 const OCR_CONFIDENCE_THRESHOLD = 55; // Tesseract's 0-100 mean confidence
 
 // One worker per language set, created lazily and reused for the rest of
