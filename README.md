@@ -38,6 +38,7 @@ backend/         Node.js + Express API. Provider-based: every external
 | Geocoding | [Photon](https://photon.komoot.io/) (default) or [OpenStreetMap Nominatim](https://nominatim.org/) | Both free, keyless, OSM-based. Photon is the default — see rate-limit notes below for why. Switch with `GEOCODING_PROVIDER=nominatim`. |
 | Places (parks, outdoor activities, restaurants) | [OpenStreetMap Overpass API](https://overpass-api.de/) | Free, keyless, shared community resource. |
 | Product/barcode lookup | [Open Food Facts](https://world.openfoodfacts.org/) | Free, keyless, community-editable product database. |
+| Restaurant halal certification cross-check | [HMA Canada](https://hmacanada.org/) + [ISNA Canada](https://isnahalal.com/) | Free, keyless. Real third-party certifier directories, cross-checked against every restaurant — see "Restaurant halal verification" below. Canada-only coverage. |
 | Ingredient OCR | [Tesseract.js](https://github.com/naptha/tesseract.js) | Runs entirely client-side (in the browser) — no image is ever sent to a server for OCR. |
 | Ingredient translation | [MyMemory](https://mymemory.translated.net/) | Free, keyless, used client-side to translate OCR'd/non-English ingredient text to English before the backend screens it. |
 
@@ -195,9 +196,24 @@ its output:
   which is why it's always low confidence and always says "not confirmed,
   please verify." Pork evidence or an explicit `diet:halal=no` tag still
   overrides it.
+- **Third-party certification check is Canada-only in practice**: every
+  restaurant is cross-checked against HMA Canada's and ISNA Canada's own
+  public certified-restaurant directories (`HalalCertificationDirectoryService.js`)
+  — a real audit, the strongest evidence tier available. Both directories
+  are free and keyless (no registration, no billing), but they only cover
+  Canada (mostly Ontario), so this adds no coverage for restaurants
+  elsewhere. Matching is deliberately conservative — see
+  CLAUDE.md's "Restaurant halal verification" section for exactly how
+  chain-branch disambiguation works (GPS proximity for ISNA, `addr:city`
+  agreement for HMA) — so an actually-certified restaurant with missing
+  location/city data on OpenStreetMap may still show as "Unknown" rather
+  than being wrongly matched to the wrong branch.
 - **No ratings**: OSM has no rating/review field, unlike commercial
   providers (Google Places, Yelp). The UI simply omits a rating rather
-  than fabricating one.
+  than fabricating one — adding Google Places ratings was considered and
+  declined (would require a Google Cloud account with billing enabled,
+  conflicting with this project's free-first constraint) in favor of
+  staying fully free/keyless.
 - **Official website/menu check is shallow**: when enabled, it does a
   plain-text keyword scan of the fetched page (after checking
   `robots.txt`) — it cannot distinguish a halal-only branch/menu section

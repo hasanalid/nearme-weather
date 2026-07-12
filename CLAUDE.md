@@ -169,6 +169,22 @@ capped at 30 results, cached per rounded-coordinate+radius key.
 is a separate endpoint since it additionally attaches a `halal`
 classification to every result (see below).
 
+**Parks sub-categorization** (`classifyParkType` in
+`backend/src/providers/places/parkClassifier.js`): every "parks" result
+also carries a `parkType` of `'provincial'` or `'local'`, and the
+frontend groups results under "🏞️ Provincial Parks" / "🌳 Local Parks"
+headers (`PARK_GROUPS` in `frontend/index.html`; a group with zero
+matches is skipped). Classification is a best-effort, tag-based
+approximation — matches only when `protection_title`, `operator`,
+`designation`, or `name` textually contains "provincial" — **not** on
+size or `boundary=protected_area` status alone, since OSM has no single
+reliable tag for "this is specifically a *provincial* (vs. national or
+just large) park" everywhere. This means it will under-classify a
+provincial park that isn't textually labelled as such, but it will never
+mis-label an ordinary local park as provincial. Don't "improve" this by
+matching on `boundary=protected_area` alone — that also matches national
+parks (Parks Canada) and other protected areas that aren't provincial.
+
 **Unnamed places are filtered out** (`OverpassProvider.search()`, the
 `if (!place.tags.name) return false` line) — a place with no `name` tag
 isn't useful to show the user regardless of category, so these are
@@ -204,7 +220,8 @@ points to preserve:
   from OSM data — never a searched/scraped URL) if
   `ENABLE_WEB_MENU_CHECK=true`, checking `robots.txt` first.
 - **Classification priority order** (`HALAL_CLASSIFICATION` in
-  `RestaurantHalalVerifier.js`): pork-related text overrides halal-leaning
+  `RestaurantHalalVerifier.js`): **third-party certification directory
+  match** (see below) → pork-related text overrides halal-leaning
   evidence (unless a clearly-separated halal-only section could be
   detected, which this analyzer has no reliable way to do — that carve-out
   is intentionally never auto-applied) → `diet:halal=no` →
@@ -213,6 +230,46 @@ points to preserve:
   `likely_halal` depending on whether the cuisine tag looks like a mixed
   menu) → **cuisine-based low-confidence heuristic** (see below) →
   `unknown` (no other evidence at all).
+- **Third-party certification directory check**
+  (`backend/src/services/HalalCertificationDirectoryService.js`,
+  `certificationDirectoryService` in `RestaurantHalalVerifier`): cross-checks
+  every restaurant against two real, independent Canadian halal
+  certifiers' own public directories — **HMA Canada** (Halal Monitoring
+  Authority) and **ISNA Canada** — both plain, keyless, server-rendered
+  HTML pages, fetched and cached for 24h (10 min on failure, to avoid
+  hammering a down source), no login/API key/registration required. This
+  is the single strongest evidence tier (`halal_confirmed`, `'high'`
+  confidence) — a real audit outranks even a scraped-website pork match,
+  because a naive substring scan (e.g. "no pork used") is more likely to
+  be a false positive than a matched certification is to be wrong.
+  Runs in **list mode too**, not just deep mode, since it's just an
+  in-memory lookup against the cached directories once warm — cheap
+  enough to run per-restaurant via `Promise.all` in the list route.
+  Concurrent cold-cache fetches are deduped (`this.pending` map) so a
+  cache miss during a busy list request fires one fetch total, not one
+  per restaurant.
+  - **Matching is deliberately conservative**: both directories list
+    national/regional chains (Fortinos, Paramount Fine Foods, D Spot
+    Desserts, etc.) where only *specific branches* are certified — a
+    name match alone is never sufficient, or every branch everywhere
+    would get wrongly certified. **ISNA** entries carry real GPS
+    coordinates for most listings, so those are matched by proximity
+    (within 300m); a name match at the wrong location is correctly
+    rejected. **HMA** publishes no coordinates at all — only a city
+    label, which for most entries comes from a page section `<h3>`
+    heading rather than the entry text itself (`parseHmaDirectory` does
+    a sequential scan tracking "current city" across headings; a rare
+    entry like "Fortinos Supermarket (Bolton)" repeats the city
+    parenthetically, most like "The Kabab Shoppe" don't). HMA matches are
+    gated on the restaurant's own `addr:city` OSM tag agreeing with that
+    heading — **no match at all if `addr:city` is missing**, rather than
+    guessing. Both parsers are scoped to just the actual directory
+    section of each page (between the city `<select>` and the page
+    footer) since both sites reuse the same list-item CSS classes for
+    unrelated nav/footer links elsewhere on the page.
+  - A fetch/parse failure is treated as "no evidence available," same
+    philosophy as `WebMenuChecker` — never a false negative signal, and
+    never throws.
 - **Cuisine-based "likely halal" heuristic** (`HALAL_LIKELY_CUISINE_KEYWORDS`
   /`cuisineSuggestsLikelyHalal` in `RestaurantHalalVerifier.js`): a
   deliberate, narrow exception to "never infer from cuisine alone,"
@@ -238,10 +295,27 @@ points to preserve:
   `halal_confirmed`. The restaurants tab always shows the persistent
   disclaimer ("Halal status is based on available public data and may be
   incomplete...") regardless of classification.
+- **Restaurant sub-sections**: results are grouped under three headers
+  (`RESTAURANT_GROUPS` in `frontend/index.html`, rendered via
+  `renderGroupedPlaces`) — "✅ Halal" (`halal_confirmed` +
+  `likely_halal`), "🔶 Needs Verification" (`mixed_needs_verification` +
+  `unknown`), "⛔ Non-Halal" (`non_halal`). `unknown` is grouped with
+  "Needs Verification," not "Non-Halal" — it has neither confirming nor
+  disconfirming evidence, so lumping it in with actual non-halal matches
+  would overstate how much negative evidence exists. A group with zero
+  matches is skipped entirely rather than rendered empty. Note: using the
+  "Deeper Check" button can change a card's classification (e.g. new pork
+  evidence, or moving from `unknown` to `likely_halal`) without moving it
+  to the correct section until the next full list reload — a known,
+  minor cosmetic gap, not a data-correctness issue.
 - Unit tests: `backend/test/restaurantHalalVerifier.test.js` — covers
   each classification tier, list-vs-deep mode (confirms list mode never
-  fetches a website even when a URL is present), and
-  `ENABLE_WEB_MENU_CHECK=false` fully disabling the fetch.
+  fetches a website even when a URL is present),
+  `ENABLE_WEB_MENU_CHECK=false` fully disabling the fetch, and the
+  certification-directory branch. `backend/test/halalCertificationDirectoryService.test.js`
+  covers both sites' HTML parsing (against realistic fixtures) and the
+  conservative matching rules. `backend/test/parkClassifier.test.js`
+  covers the provincial/local tag heuristic.
 
 ## App icon design
 `icon-192.png`/`icon-512.png`: a white location pin (same silhouette as
@@ -367,7 +441,7 @@ at least as cautious as what's described here.
 
 ## When making changes
 - If you touch `frontend/index.html` (or anything else in the app
-  shell), bump `CACHE_NAME` in `frontend/sw.js` (e.g. `nearme-weather-v12`)
+  shell), bump `CACHE_NAME` in `frontend/sw.js` (e.g. `nearme-weather-v13`)
   — otherwise the service worker's cache-first strategy keeps serving
   whatever it first installed, since the byte-identical `sw.js` never
   re-triggers install.

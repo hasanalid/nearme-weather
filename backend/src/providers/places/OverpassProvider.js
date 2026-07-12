@@ -1,5 +1,6 @@
 import { PlacesProvider } from './PlacesProvider.js';
 import { OSM_CATEGORY_TAGS } from './osmCategoryMap.js';
+import { classifyParkType } from './parkClassifier.js';
 import { fetchWithTimeout } from '../../utils/http.js';
 import { haversineDistanceMeters } from '../../utils/geo.js';
 
@@ -95,6 +96,7 @@ function normalizeElement(el, category) {
     websiteMenu: tags['website:menu'] || null,
     phone: tags.phone || tags['contact:phone'] || null,
     openingHours: tags.opening_hours || null,
+    ...(category === 'parks' ? { parkType: classifyParkType(tags) } : {}),
   };
 }
 

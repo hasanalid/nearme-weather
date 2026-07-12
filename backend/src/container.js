@@ -10,6 +10,7 @@ import { OverpassProvider } from './providers/places/OverpassProvider.js';
 import { OpenFoodFactsProvider } from './providers/product/OpenFoodFactsProvider.js';
 import { HalalIngredientAnalyzer } from './services/HalalIngredientAnalyzer.js';
 import { WebMenuChecker } from './services/WebMenuChecker.js';
+import { HalalCertificationDirectoryService } from './services/HalalCertificationDirectoryService.js';
 import { RestaurantHalalVerifier } from './services/RestaurantHalalVerifier.js';
 
 // Simple composition root — every provider is registered by its
@@ -61,9 +62,15 @@ export function createContainer() {
 
   const halalIngredientAnalyzer = new HalalIngredientAnalyzer();
   const webMenuChecker = new WebMenuChecker();
+  // Free, keyless, public directories — no registration required, so this
+  // runs unconditionally (unlike webMenuChecker, which is opt-in via
+  // ENABLE_WEB_MENU_CHECK since it fetches an arbitrary restaurant's own
+  // site). See HalalCertificationDirectoryService.js for source details.
+  const certificationDirectoryService = new HalalCertificationDirectoryService({ cache });
   const restaurantHalalVerifier = new RestaurantHalalVerifier({
     webMenuChecker,
     enableWebMenuCheck: config.enableWebMenuCheck,
+    certificationDirectoryService,
   });
 
   return {

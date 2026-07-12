@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RestaurantHalalVerifier, HALAL_CLASSIFICATION } from '../src/services/RestaurantHalalVerifier.js';
 
-function makeVerifier({ webMenuText = null, enableWebMenuCheck = false } = {}) {
+function makeVerifier({ webMenuText = null, enableWebMenuCheck = false, certificationMatch = null } = {}) {
   const webMenuChecker = { fetchPageText: async () => webMenuText };
-  return new RestaurantHalalVerifier({ webMenuChecker, enableWebMenuCheck });
+  const certificationDirectoryService = certificationMatch
+    ? { findMatch: async () => certificationMatch }
+    : null;
+  return new RestaurantHalalVerifier({ webMenuChecker, enableWebMenuCheck, certificationDirectoryService });
 }
 
 test('no evidence -> unknown, never inferred from cuisine alone', async () => {
@@ -103,6 +106,35 @@ test('cuisine with no halal association at all stays unknown (e.g. Chinese)', as
   const verifier = makeVerifier();
   const result = await verifier.verify({ tags: { cuisine: 'chinese' } });
   assert.equal(result.classification, HALAL_CLASSIFICATION.UNKNOWN);
+});
+
+test('a certification directory match -> halal confirmed, high confidence, cited as third-party certifier', async () => {
+  const verifier = makeVerifier({
+    certificationMatch: { source: 'HMA Canada', url: 'https://hmacanada.org/hma-certified-restaurants/', matchedName: 'The Kabab Shoppe' },
+  });
+  const result = await verifier.verify({ tags: { amenity: 'restaurant' } });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.HALAL_CONFIRMED);
+  assert.equal(result.confidence, 'high');
+  assert.equal(result.sourceType, 'third_party_certifier');
+  assert.equal(result.sourceLinks[0], 'https://hmacanada.org/hma-certified-restaurants/');
+});
+
+test('a certification directory match runs in list mode too, not just deep mode', async () => {
+  const verifier = makeVerifier({
+    certificationMatch: { source: 'ISNA Canada', url: 'https://isnahalal.com/business/x/', matchedName: 'X' },
+  });
+  const result = await verifier.verify({ tags: {} }, { deep: false });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.HALAL_CONFIRMED);
+});
+
+test('a certification directory match wins over a pork-term match in scraped website text', async () => {
+  const verifier = makeVerifier({
+    webMenuText: 'Our menu includes bacon.',
+    enableWebMenuCheck: true,
+    certificationMatch: { source: 'HMA Canada', url: 'https://hmacanada.org/hma-certified-restaurants/', matchedName: 'X' },
+  });
+  const result = await verifier.verify({ tags: {}, websiteMenu: 'https://example.com/menu' }, { deep: true });
+  assert.equal(result.classification, HALAL_CLASSIFICATION.HALAL_CONFIRMED);
 });
 
 test('ENABLE_WEB_MENU_CHECK=false skips the website fetch entirely, even in deep mode', async () => {

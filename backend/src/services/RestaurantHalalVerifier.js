@@ -58,9 +58,10 @@ function cuisineSuggestsLikelyHalal(cuisine) {
 }
 
 export class RestaurantHalalVerifier {
-  constructor({ webMenuChecker, enableWebMenuCheck }) {
+  constructor({ webMenuChecker, enableWebMenuCheck, certificationDirectoryService }) {
     this.webMenuChecker = webMenuChecker;
     this.enableWebMenuCheck = enableWebMenuCheck;
+    this.certificationDirectoryService = certificationDirectoryService;
   }
 
   async verify(place, { deep = false } = {}) {
@@ -72,6 +73,23 @@ export class RestaurantHalalVerifier {
 
     const dietHalal = (tags['diet:halal'] || '').toLowerCase();
     const cuisine = (tags.cuisine || '').toLowerCase();
+
+    // Real third-party certification check — cheap once the directories
+    // are cached (see HalalCertificationDirectoryService), so this runs
+    // in list mode too, not just deep mode.
+    let certificationMatch = null;
+    if (this.certificationDirectoryService) {
+      certificationMatch = await this.certificationDirectoryService.findMatch({
+        name: place.name || tags.name,
+        lat: place.lat,
+        lon: place.lon,
+        addrCity: tags['addr:city'] || null,
+      });
+    }
+    if (certificationMatch) {
+      evidence.push(`Listed as halal-certified by ${certificationMatch.source} ("${certificationMatch.matchedName}")`);
+      sourceLinks.push(certificationMatch.url);
+    }
 
     let lowerWebsiteText = '';
     if (deep && this.enableWebMenuCheck) {
@@ -106,14 +124,27 @@ export class RestaurantHalalVerifier {
     if (websiteHalalOptions) evidence.push('Official website/menu text mentions halal options/dishes');
     if (porkDetected) evidence.push(`Official website/menu text mentions a pork-related term ("${porkMatch || 'salami'}")`);
 
-    // Priority order matters: pork evidence overrides halal-leaning
-    // evidence unless the source clearly separates a halal-only branch or
-    // menu section — which this analyzer has no reliable way to detect
-    // from tags/text alone, so that carve-out is never applied automatically.
+    // Priority order matters: a real third-party certifier match is the
+    // strongest evidence available (an actual audit, not an inferred or
+    // self-reported signal) so it's checked first and wins even over a
+    // pork-term match in scraped website text — a naive substring scan is
+    // more likely to be a false positive (e.g. "no pork used") than a
+    // matched, GPS/city-verified certification is to be wrong. Below that,
+    // pork evidence overrides halal-leaning evidence unless the source
+    // clearly separates a halal-only branch or menu section — which this
+    // analyzer has no reliable way to detect from tags/text alone, so that
+    // carve-out is never applied automatically.
     let classification;
     let confidence;
 
-    if (porkDetected) {
+    if (certificationMatch) {
+      classification = HALAL_CLASSIFICATION.HALAL_CONFIRMED;
+      confidence = 'high';
+      sourceType = 'third_party_certifier';
+      reasons.push(
+        `Found in ${certificationMatch.source}'s public directory of halal-certified restaurants — a real third-party halal certification body, not an inferred signal.`
+      );
+    } else if (porkDetected) {
       classification = HALAL_CLASSIFICATION.NON_HALAL;
       confidence = sourceType !== 'not_available' ? 'high' : 'medium';
       reasons.push(

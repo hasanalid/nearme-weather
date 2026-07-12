@@ -1234,8 +1234,28 @@ const SOURCE_TYPE_LABELS = {
   official_website: 'Official website',
   official_menu: 'Official menu',
   product_metadata: 'Product/provider metadata',
+  third_party_certifier: 'Certified halal directory (HMA Canada / ISNA Canada)',
   not_available: 'Not available',
 };
+
+// Sub-sections shown within a category's results, in display order. Each
+// restaurant/park is assigned to exactly the first matching group.
+// "Needs Verification" deliberately groups "Mixed" together with
+// "Unknown" — neither is confirmed halal NOR confirmed non-halal, so
+// lumping "Unknown" in with "Non-Halal" would overstate how much
+// negative evidence actually exists for it.
+const RESTAURANT_GROUPS = [
+  { label: 'Halal', emoji: '✅', classifications: ['halal_confirmed', 'likely_halal'] },
+  { label: 'Needs Verification', emoji: '🔶', classifications: ['mixed_needs_verification', 'unknown'] },
+  { label: 'Non-Halal', emoji: '⛔', classifications: ['non_halal'] },
+];
+
+// See backend/src/providers/places/parkClassifier.js for how parkType is
+// derived — a best-effort, tag-based approximation, not a guarantee.
+const PARK_GROUPS = [
+  { label: 'Provincial Parks', emoji: '🏞️', match: (p) => p.parkType === 'provincial' },
+  { label: 'Local Parks', emoji: '🌳', match: (p) => p.parkType !== 'provincial' },
+];
 
 let currentPlacesCategory = 'parks';
 let lastPlacesCoords = null; // { lat, lon } — set once per location by loadEverythingForCoords
@@ -1331,6 +1351,29 @@ function buildRestaurantCard(place) {
   return card;
 }
 
+function appendGroupHeader(label, emoji, count) {
+  const header = document.createElement('div');
+  header.className = 'flex items-center gap-2 mt-5 mb-2 first:mt-0';
+  header.innerHTML = `
+    <span class="text-sm font-semibold text-white">${emoji} ${escapeHtml(label)}</span>
+    <span class="text-xs text-neutral-500">${count}</span>
+  `;
+  placesList.appendChild(header);
+}
+
+// Renders places as flat cards, or split into labelled sub-sections when
+// the category defines groups (Restaurants: Halal / Needs Verification /
+// Non-Halal; Parks: Provincial / Local) — see RESTAURANT_GROUPS/PARK_GROUPS.
+// A group with zero matches is skipped entirely rather than shown empty.
+function renderGroupedPlaces(places, groups, buildCard, matchesGroup) {
+  for (const group of groups) {
+    const items = places.filter((place) => matchesGroup(place, group));
+    if (!items.length) continue;
+    appendGroupHeader(group.label, group.emoji, items.length);
+    items.forEach((place) => placesList.appendChild(buildCard(place)));
+  }
+}
+
 function renderPlaces(places, category) {
   placesList.innerHTML = '';
   restaurantDisclaimer.classList.toggle('hidden', category !== 'restaurants');
@@ -1343,10 +1386,15 @@ function renderPlaces(places, category) {
     return;
   }
 
-  places.forEach((place) => {
-    const card = category === 'restaurants' ? buildRestaurantCard(place) : buildPlaceCard(place);
-    placesList.appendChild(card);
-  });
+  if (category === 'restaurants') {
+    renderGroupedPlaces(places, RESTAURANT_GROUPS, buildRestaurantCard, (place, group) =>
+      group.classifications.includes(place.halal.classification)
+    );
+  } else if (category === 'parks') {
+    renderGroupedPlaces(places, PARK_GROUPS, buildPlaceCard, (place, group) => group.match(place));
+  } else {
+    places.forEach((place) => placesList.appendChild(buildPlaceCard(place)));
+  }
 
   placesLoading.classList.add('hidden');
   placesEmpty.classList.add('hidden');
