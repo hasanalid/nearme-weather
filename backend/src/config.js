@@ -23,6 +23,11 @@ export const config = {
   enableWebMenuCheck: process.env.ENABLE_WEB_MENU_CHECK === 'true',
 
   cacheTtlSeconds: Number(process.env.CACHE_TTL_SECONDS) || 3600,
+  // Optional persistent cache. Unset (the default) means in-memory, which
+  // is simplest for local dev but is wiped on every restart/redeploy. Set
+  // to a real Redis connection string (e.g. from a free Upstash instance)
+  // to survive restarts — see container.js and RedisCacheService.js.
+  redisUrl: process.env.REDIS_URL || null,
 
   maxSearchRadiusMeters: Number(process.env.MAX_SEARCH_RADIUS_METERS) || 5000,
   defaultSearchRadiusMeters: Number(process.env.DEFAULT_SEARCH_RADIUS_METERS) || 3000,

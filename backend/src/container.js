@@ -1,5 +1,7 @@
+import Redis from 'ioredis';
 import { config } from './config.js';
 import { InMemoryCacheService } from './cache/CacheService.js';
+import { RedisCacheService } from './cache/RedisCacheService.js';
 import { RateLimitService } from './rateLimit/RateLimitService.js';
 import { OpenMeteoProvider } from './providers/weather/OpenMeteoProvider.js';
 import { MetNoProvider } from './providers/weather/MetNoProvider.js';
@@ -13,12 +15,38 @@ import { WebMenuChecker } from './services/WebMenuChecker.js';
 import { HalalCertificationDirectoryService } from './services/HalalCertificationDirectoryService.js';
 import { RestaurantHalalVerifier } from './services/RestaurantHalalVerifier.js';
 
+// REDIS_URL unset (the default) means in-memory — simplest for local
+// dev, but wiped on every restart/redeploy. Set REDIS_URL (e.g. a free
+// Upstash instance) to persist weather/places/certification cache
+// entries across restarts instead — see RedisCacheService.js.
+function createCache() {
+  if (!config.redisUrl) return new InMemoryCacheService();
+
+  const client = new Redis(config.redisUrl, {
+    // Cap retries per request rather than retrying forever, so a Redis
+    // outage surfaces as a quick cache-miss (RedisCacheService.get/set
+    // catch and log it) instead of hanging every request that touches
+    // the cache.
+    maxRetriesPerRequest: 2,
+  });
+  // ioredis emits an 'error' event on every connection hiccup; without a
+  // listener, Node treats an unhandled 'error' event as fatal and kills
+  // the process. Logging (not throwing) here is what actually makes this
+  // "fail closed" per RedisCacheService's contract, rather than taking
+  // the whole app down over a transient Redis blip.
+  client.on('error', (err) => {
+    console.error('[Redis] connection error', { error: err.message });
+  });
+
+  return new RedisCacheService({ client });
+}
+
 // Simple composition root — every provider is registered by its
 // PROVIDER env var name, so switching providers later (e.g. adding a
 // second weather provider) is a matter of adding another entry here,
 // never touching routes or services.
 export function createContainer() {
-  const cache = new InMemoryCacheService();
+  const cache = createCache();
   const rateLimiter = new RateLimitService();
 
   const weatherProviders = {

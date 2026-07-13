@@ -70,8 +70,9 @@ backend/          Node.js + Express API (ES modules, `"type": "module"`).
                   RestaurantHalalVerifier (evidence-based classification),
                   WebMenuChecker (optional, off-by-default official
                   website/menu text fetch, robots.txt-respecting).
-  src/cache/      CacheService interface + InMemoryCacheService (default;
-                  swap in Redis later behind the same interface).
+  src/cache/      CacheService interface + InMemoryCacheService (default)
+                  + RedisCacheService (optional, persistent — see
+                  "Persistent cache (Redis)" below).
   src/rateLimit/  RateLimitService — throttles OUR OWN outbound calls to
                   Nominatim/Overpass. Separate from the inbound
                   express-rate-limit middleware in app.js, which protects
@@ -434,10 +435,50 @@ at least as cautious as what's described here.
   backend: keeps OCR cost at zero (no server-side compute/GPU), and
   keeps photos from ever leaving the device — only extracted text is
   sent anywhere.
-- In-memory cache/rate-limiting instead of Redis from day one: this
-  app's scale doesn't need it yet, and the `CacheService`/
-  `RateLimitService` interfaces make swapping in Redis later a
-  contained change (see README).
+- In-memory rate-limiting: this app's scale doesn't need Redis for that
+  yet. Caching, however, now supports Redis as an *optional* persistent
+  backend — see "Persistent cache (Redis)" below.
+
+## Persistent cache (Redis)
+`REDIS_URL` unset (the default) means `InMemoryCacheService` — simplest
+for local dev, but wiped on every process restart/redeploy. Setting
+`REDIS_URL` switches `container.js`'s `createCache()` to
+`RedisCacheService` instead, behind the exact same `get(key)`/
+`set(key, value, ttlSeconds)` interface — no other code (providers,
+routes, services) needed to change.
+- **Why this was added**: Render's free tier resets in-memory state on
+  every restart/redeploy, so the very next visitor after any deploy (or
+  after the free-tier container sleeps and wakes) pays full cold-fetch
+  price again for weather/places/halal-certification-directory lookups.
+  A persistent cache means only the *first* fetch after a TTL genuinely
+  expires pays that cost, not every restart.
+- **What it does NOT fix**: Render's free-tier cold start itself (the
+  container being fully asleep and taking 30-50s to wake up) — that's a
+  separate problem, addressed by a keep-alive ping hitting `/api/health`
+  periodically, not by caching. Don't conflate the two when reasoning
+  about "why is it still slow."
+- **Fails closed, not open** (`RedisCacheService.js`): a Redis outage or a
+  corrupted cached value never throws — `get()` returns `null` (a cache
+  miss) and `set()` silently no-ops, both logged via `console.error`.
+  Every existing caller (`OverpassProvider`, `OpenMeteoProvider`,
+  `HalalCertificationDirectoryService`, etc.) already assumes
+  `cache.get()`/`set()` never throws, so this preserves that contract —
+  a Redis outage degrades to "always re-fetching," never to a 502 for
+  the whole app. `container.js`'s `createCache()` also attaches an
+  `error` listener to the raw `ioredis` client itself — without one,
+  Node treats an unhandled `error` event as fatal and crashes the
+  process, which would defeat the entire "fail closed" design.
+- **Setup**: create a free Redis instance (e.g.
+  [Upstash](https://upstash.com), no credit card required) and set
+  `REDIS_URL` to its connection string, locally in `.env` or in Render's
+  dashboard as an environment variable (`render.yaml` declares the key
+  with `sync: false` so Render expects it set manually, not committed —
+  it's a secret). Leaving it unset is fully supported and just means
+  "no persistence, same as before."
+- Unit tests: `backend/test/redisCacheService.test.js` — uses a fake
+  client (not a real Redis connection) to test JSON round-tripping, TTL
+  passthrough as Redis's `EX` argument, corrupted-JSON handling, and that
+  client errors are swallowed rather than thrown.
 
 ## When making changes
 - If you touch `frontend/index.html` (or anything else in the app

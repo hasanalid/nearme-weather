@@ -142,7 +142,8 @@ Summary:
 | `PRODUCT_PROVIDER` | `openfoodfacts` | Same. |
 | `NOMINATIM_USER_AGENT` | *(placeholder — change this)* | Required by Nominatim's usage policy. |
 | `ENABLE_WEB_MENU_CHECK` | `false` | Whether the restaurant verifier may fetch a restaurant's own official website/menu URL (from OSM data only) as supplementary evidence. Off by default since it performs a live third-party fetch. |
-| `CACHE_TTL_SECONDS` | `3600` | In-memory cache TTL for geocoding/places/restaurant/product lookups. |
+| `CACHE_TTL_SECONDS` | `3600` | Cache TTL for geocoding/places/restaurant/product lookups (in-memory or Redis, whichever is active). |
+| `REDIS_URL` | *(unset — in-memory)* | Optional persistent cache. Set to a Redis connection string (e.g. a free [Upstash](https://upstash.com) instance) to survive restarts/redeploys instead of losing all cached data every time. See CLAUDE.md's "Persistent cache (Redis)" section for why this was added and its fail-closed behavior on outages. |
 | `MAX_SEARCH_RADIUS_METERS` | `5000` | Hard cap on the `radius` query param for `/api/places` and `/api/restaurants`. |
 | `DEFAULT_SEARCH_RADIUS_METERS` | `3000` | Used when `radius` isn't specified. |
 | `API_RATE_LIMIT_PER_MINUTE` | `60` | Inbound rate limit per client IP against our own API (protects the free upstream providers from being hammered via us). |

@@ -32,3 +32,11 @@ services:
         value: "3000"
       - key: API_RATE_LIMIT_PER_MINUTE
         value: "60"
+      # Optional persistent cache (survives restarts/redeploys — the
+      # default in-memory cache doesn't). Create a free Redis instance
+      # (e.g. https://upstash.com) and set its connection string here in
+      # the Render dashboard — sync: false means Render won't try to
+      # manage this value from this file, since it's a secret. Leave unset
+      # to keep the in-memory default; nothing else needs to change.
+      - key: REDIS_URL
+        sync: false
