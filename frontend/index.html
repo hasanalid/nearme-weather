@@ -150,19 +150,19 @@
       <!-- ============================================================
            CURRENT WEATHER CARD (feature #4)
            ============================================================ -->
-      <section id="currentWeatherCard" class="mt-5 rounded-3xl bg-gradient-to-br from-sky-900/60 via-neutral-900 to-neutral-900 border border-neutral-800 p-6">
+      <section id="currentWeatherCard" class="mt-5 rounded-3xl bg-gradient-to-br from-sky-900/60 via-neutral-900 to-neutral-900 border border-neutral-800 p-4">
         <div id="currentWeatherLoading" class="flex items-center gap-2 text-neutral-400 text-sm">
           <div class="spinner"></div> Loading current weather…
         </div>
         <div id="currentWeatherContent" class="hidden fade-in cursor-pointer active:scale-[0.99] transition" title="Tap for hourly forecast">
           <div class="flex items-start justify-between">
             <div>
-              <p id="currentTemp" class="text-6xl font-bold text-white leading-none">--°</p>
-              <p id="currentCondition" class="text-neutral-300 mt-2 text-sm">--</p>
+              <p id="currentTemp" class="text-4xl font-bold text-white leading-none">--°</p>
+              <p id="currentCondition" class="text-neutral-300 mt-1 text-xs">--</p>
             </div>
-            <div id="currentEmoji" class="text-6xl">🌡️</div>
+            <div id="currentEmoji" class="text-4xl">🌡️</div>
           </div>
-          <div class="flex gap-4 mt-5 text-sm text-neutral-300">
+          <div class="flex gap-3 mt-3 text-xs text-neutral-300">
             <div class="flex items-center gap-1.5">
               <span>💨</span> <span id="currentWind">-- km/h</span>
             </div>
@@ -170,7 +170,7 @@
               <span>🕒</span> <span id="currentTime">--</span>
             </div>
           </div>
-          <div class="flex gap-4 mt-3 text-sm text-neutral-300">
+          <div class="flex gap-3 mt-2 text-xs text-neutral-300">
             <div class="flex items-center gap-1.5">
               <span>🌅</span> <span id="currentSunrise">--</span>
             </div>
@@ -178,7 +178,7 @@
               <span>🌇</span> <span id="currentSunset">--</span>
             </div>
           </div>
-          <p class="text-xs text-sky-400/80 mt-4">Tap for hourly forecast →</p>
+          <p class="text-xs text-sky-400/80 mt-2">Tap for hourly forecast →</p>
         </div>
       </section>
 
